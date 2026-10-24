@@ -29,19 +29,20 @@ object M3u {
 
     fun parse(lines: Sequence<String>): List<Channel> {
         val out = ArrayList<Channel>()
-        var meta: Map<String, String>? = null
-        var name = ""
+        var info: String? = null
         var uid = 0
         for (raw in lines) {
             val l = raw.trim().removePrefix("﻿")
             if (l.startsWith("#EXTINF")) {
-                meta = attr.findAll(l).associate { it.groupValues[1].lowercase() to it.groupValues[2] }
-                // Namnet står efter första kommatecknet som kommer efter sista attributet
-                name = l.substring(maxOf(l.lastIndexOf('"'), 0)).substringAfter(',', "").trim()
-            } else if (l.isNotEmpty() && !l.startsWith("#") && meta != null) {
-                val m = meta
-                meta = null
+                info = l
+            } else if (l.isNotEmpty() && !l.startsWith("#") && info != null) {
+                val inf = info
+                info = null
+                // Filmer och serier hoppas över innan raden tolkas, så stora listor går snabbt.
                 if (isVod(l)) continue
+                val m = attr.findAll(inf).associate { it.groupValues[1].lowercase() to it.groupValues[2] }
+                // Namnet står efter första kommatecknet som kommer efter sista attributet
+                val name = inf.substring(maxOf(inf.lastIndexOf('"'), 0)).substringAfter(',', "").trim()
                 val group = m["group-title"].orEmpty()
                 val code = m["tvg-country"]?.split(';', ',')?.firstOrNull()?.trim().orEmpty()
                 out += Channel(

@@ -23,6 +23,8 @@ import java.net.URL
 import java.util.zip.GZIPInputStream
 
 const val UA = "Mozilla/5.0 (Linux; Android 12) GlassTV/1.0"
+/** Höjs när sättet att tolka spellistan ändras, så att den sparade kanallistan byggs om. */
+const val CACHE_VERSION = 2
 
 class Repo(ctx: Context) {
     private val prefs = ctx.getSharedPreferences("glasstv", Context.MODE_PRIVATE)
@@ -55,9 +57,49 @@ class Repo(ctx: Context) {
         get() = prefs.getBoolean("pv", true)
         set(v) { prefs.edit().putBoolean("pv", v).apply() }
 
-    fun cachedChannels(): List<Channel> = try {
-        if (playlistFile.exists()) playlistFile.bufferedReader().useLines { M3u.parse(it) } else emptyList()
-    } catch (e: Exception) { emptyList() }
+    private val channelCache = File(ctx.filesDir, "channels.bin")
+
+    /**
+     * Kanallistan sparas färdigtolkad, så att appen startar direkt utan att läsa om hela spellistan.
+     * Bara om spellistan är nyare än den sparade listan (eller formatet ändrats) tolkas den om.
+     */
+    fun cachedChannels(): List<Channel> {
+        if (!playlistFile.exists()) return emptyList()
+        if (channelCache.exists() && channelCache.lastModified() >= playlistFile.lastModified())
+            readCache()?.let { return it }
+        val list = try { playlistFile.bufferedReader().useLines { M3u.parse(it) } } catch (e: Exception) { emptyList() }
+        if (list.isNotEmpty()) writeCache(list)
+        return list
+    }
+
+    private fun writeCache(list: List<Channel>) {
+        try {
+            val tmp = File.createTempFile("channels", ".tmp", channelCache.parentFile)
+            DataOutputStream(BufferedOutputStream(FileOutputStream(tmp), 64 * 1024)).use { o ->
+                o.writeInt(CACHE_VERSION); o.writeInt(list.size)
+                for (c in list) {
+                    o.writeInt(c.uid); o.writeUTF(c.id.take(2000)); o.writeUTF(c.name.take(2000)); o.writeUTF(c.url.take(8000))
+                    o.writeUTF(c.logo?.take(4000) ?: ""); o.writeUTF(c.country.take(500)); o.writeUTF(c.group.take(500))
+                }
+            }
+            if (!tmp.renameTo(channelCache)) { tmp.copyTo(channelCache, overwrite = true); tmp.delete() }
+        } catch (e: Exception) { channelCache.delete() }
+    }
+
+    private fun readCache(): List<Channel>? {
+        return try {
+            DataInputStream(BufferedInputStream(FileInputStream(channelCache), 64 * 1024)).use { i ->
+                if (i.readInt() != CACHE_VERSION) return null
+                val n = i.readInt()
+                if (n < 0 || n > 2_000_000) return null
+                val out = ArrayList<Channel>(n)
+                repeat(n) {
+                    out += Channel(i.readInt(), i.readUTF(), i.readUTF(), i.readUTF(), i.readUTF().ifEmpty { null }, i.readUTF(), i.readUTF())
+                }
+                out
+            }
+        } catch (e: Exception) { null }
+    }
 
     fun hasPlaylist() = playlistFile.exists() && playlistFile.length() > 0
     private fun fresh(f: File) = f.exists() && System.currentTimeMillis() - f.lastModified() < 12 * 3600_000L
@@ -235,16 +277,17 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     }
 
     private var refreshJob: Job? = null
-    fun refresh() {
+    /** Hämtar spellistan på nytt. Tv-guiden hämtas bara om den är gammal, eller om [force] (knappen ↻). */
+    fun refresh(force: Boolean = true) {
         if (refreshJob?.isActive == true) return
         refreshJob = viewModelScope.launch {
             status = "Uppdaterar…"
             val errors = ArrayList<String>()
             if (repo.m3uUrl.isNotBlank()) try {
                 val list = withContext(Dispatchers.IO) { repo.downloadPlaylist() }
-                if (list.isNotEmpty()) channels = list else errors += "spellistan var tom"
+                if (list.isEmpty()) errors += "spellistan var tom" else if (list != channels) channels = list
             } catch (e: Exception) { errors += "spellistan: ${e.message ?: e.javaClass.simpleName}" }
-            if (repo.epgUrl.isNotBlank()) try {
+            if (repo.epgUrl.isNotBlank() && (force || !repo.epgFresh())) try {
                 withContext(Dispatchers.IO) { repo.downloadEpg() }
             } catch (e: Exception) { errors += "tv-guiden: ${e.message ?: e.javaClass.simpleName}" }
             status = if (errors.isEmpty()) "" else "Kunde inte uppdatera " + errors.joinToString(", ")
@@ -369,10 +412,12 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             launch(Dispatchers.Default) { warmFlags() }
             channels = withContext(Dispatchers.IO) { repo.cachedChannels() }
             loading = false
-            // Ladda bara ner igen om det sparade är äldre än 12 timmar, annars startar appen direkt.
-            if (repo.m3uUrl.isNotBlank() && (!repo.playlistFresh() || channels.isEmpty())) refresh()
-            else if (repo.epgUrl.isNotBlank() && !repo.epgFresh()) refresh()
-            else reloadEpg()
+            reloadEpg()
+            // Den sparade listan visas direkt. Efter en kort stund letas nya kanaler upp i bakgrunden.
+            if (repo.m3uUrl.isNotBlank() || repo.epgUrl.isNotBlank()) {
+                delay(if (channels.isEmpty()) 0L else 4000L)
+                refresh(force = false)
+            }
         }
     }
 
