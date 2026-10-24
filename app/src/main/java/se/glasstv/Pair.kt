@@ -18,6 +18,33 @@ fun localIp(): String? = try {
         .firstOrNull { it is Inet4Address && it.isSiteLocalAddress }?.hostAddress
 } catch (e: Exception) { null }
 
+/** Bygger M3U- och tv-guidelänk av en Xtream-inloggning (server, användarnamn, lösenord). */
+object Xtream {
+    fun host(raw: String): String {
+        var h = raw.trim().trimEnd('/')
+        if (h.isEmpty()) return ""
+        if (!h.startsWith("http://", true) && !h.startsWith("https://", true)) h = "http://" + h
+        return h
+    }
+    private fun enc(s: String) = java.net.URLEncoder.encode(s.trim(), "UTF-8")
+    fun m3u(h: String, u: String, p: String) = host(h) + "/get.php?username=" + enc(u) + "&password=" + enc(p) + "&type=m3u_plus&output=ts"
+    fun epg(h: String, u: String, p: String) = host(h) + "/xmltv.php?username=" + enc(u) + "&password=" + enc(p)
+
+    /** Läser tillbaka server, användarnamn och lösenord ur en sparad Xtream-länk, annars null. */
+    fun parse(url: String): Triple<String, String, String>? {
+        return try {
+            val u = java.net.URL(url)
+            if (!u.path.endsWith("get.php")) return null
+            val q = (u.query ?: return null).split("&").associate {
+                val kv = it.split("=", limit = 2); kv[0] to URLDecoder.decode(kv.getOrElse(1) { "" }, "UTF-8")
+            }
+            val user = q["username"] ?: return null
+            val pass = q["password"] ?: return null
+            Triple(u.protocol + "://" + u.host + (if (u.port > 0) ":" + u.port else ""), user, pass)
+        } catch (e: Exception) { null }
+    }
+}
+
 /** Liten webbserver på TV:n: mobilen öppnar sidan via QR-koden och skickar in länken. */
 class PairServer(private val onSave: (String, String) -> Unit) {
     val port = 8765
@@ -56,7 +83,9 @@ class PairServer(private val onSave: (String, String) -> Unit) {
                 val kv = it.split("=", limit = 2); kv[0] to URLDecoder.decode(kv.getOrElse(1) { "" }, "UTF-8")
             }
             val m = f["m3u"].orEmpty().trim()
+            val xh = f["host"].orEmpty().trim(); val xu = f["user"].orEmpty().trim(); val xp = f["pass"].orEmpty().trim()
             if (m.isNotEmpty()) { onSave(m, f["epg"].orEmpty().trim()); body = DONE }
+            else if (xh.isNotEmpty() && xu.isNotEmpty() && xp.isNotEmpty()) { onSave(Xtream.m3u(xh, xu, xp), Xtream.epg(xh, xu, xp)); body = DONE }
         }
         val bytes = body.toByteArray(Charsets.UTF_8)
         c.getOutputStream().apply {
@@ -66,8 +95,8 @@ class PairServer(private val onSave: (String, String) -> Unit) {
     }
 
     companion object {
-        private const val CSS = "body{font-family:system-ui,sans-serif;background:#0b1020;color:#fff;margin:0;padding:24px}input,button{width:100%;box-sizing:border-box;font-size:17px;padding:14px;border-radius:14px;border:1px solid #ffffff44;background:#ffffff14;color:#fff;margin:6px 0 16px}button{background:linear-gradient(135deg,#7aa2ff,#b14bff);border:0;font-weight:600}label{font-size:12px;letter-spacing:.1em;color:#ffffff99}"
-        private const val FORM = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><style>$CSS</style><h2>GlassTV</h2><form method=post><label>M3U-LÄNK</label><input name=m3u type=url required autofocus><label>TV-GUIDE (XMLTV) – VALFRI</label><input name=epg type=url><button>Skicka till TV:n</button></form>"
+        private const val CSS = "body{font-family:system-ui,sans-serif;background:#0b1020;color:#fff;margin:0;padding:24px}input,button{width:100%;box-sizing:border-box;font-size:17px;padding:14px;border-radius:14px;border:1px solid #ffffff44;background:#ffffff14;color:#fff;margin:6px 0 16px}button{background:linear-gradient(135deg,#7aa2ff,#b14bff);border:0;font-weight:600}label{font-size:12px;letter-spacing:.1em;color:#ffffff99}h3{margin:18px 0 8px;font-size:16px}"
+        private const val FORM = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><style>$CSS</style><h2>GlassTV</h2><form method=post><h3>Xtream-inloggning</h3><label>SERVER (HOST)</label><input name=host inputmode=url autocapitalize=off autocorrect=off placeholder='http://server.top:8080'><label>ANVÄNDARNAMN</label><input name=user autocapitalize=off autocorrect=off><label>LÖSENORD</label><input name=pass autocapitalize=off autocorrect=off><h3>eller M3U-länk</h3><label>M3U-LÄNK</label><input name=m3u type=url><label>TV-GUIDE (XMLTV) – VALFRI</label><input name=epg type=url><button>Skicka till TV:n</button></form>"
         private const val DONE = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><style>$CSS</style><h2>Klart ✓</h2><p>Titta på TV:n, kanalerna laddas nu.</p>"
     }
 }

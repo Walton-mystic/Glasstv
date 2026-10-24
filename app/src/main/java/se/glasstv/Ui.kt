@@ -491,6 +491,11 @@ fun Qr(text: String, box: Dp) {
 fun Settings(vm: MainVm) {
     var m by remember { mutableStateOf(vm.repo.m3uUrl) }
     var e by remember { mutableStateOf(vm.repo.epgUrl) }
+    val saved = remember { Xtream.parse(vm.repo.m3uUrl) }
+    var xt by remember { mutableStateOf(saved != null || vm.repo.m3uUrl.isBlank()) }
+    var xh by remember { mutableStateOf(saved?.first ?: "") }
+    var xu by remember { mutableStateOf(saved?.second ?: "") }
+    var xp by remember { mutableStateOf(saved?.third ?: "") }
     var link by remember { mutableStateOf<String?>(null) }
     var qrMsg by remember { mutableStateOf("Anslut TV:n till wifi för att få en QR-kod.") }
     val primary = remember { FocusRequester() }
@@ -508,13 +513,33 @@ fun Settings(vm: MainVm) {
                     Box(Modifier.size(60.dp).clip(RoundedCornerShape(18.dp)).background(Brush.linearGradient(listOf(Blue, Violet))), contentAlignment = Alignment.Center) { Text("📺", fontSize = 28.sp) }
                     Text("Välkommen till GlassTV", color = White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
                     Text("Lägg till din spellista för att komma igång.", color = White.copy(0.6f), fontSize = 16.sp)
-                    OutlinedTextField(m, { m = it }, label = { Text("M3U-länk") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(e, { e = it }, label = { Text("Tv-guide, XMLTV (valfri)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Focusable(onClick = { xt = true }, selected = xt) {
+                            Text("Xtream-inloggning", color = White, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp))
+                        }
+                        Focusable(onClick = { xt = false }, selected = !xt) {
+                            Text("M3U-länk", color = White, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp))
+                        }
+                    }
+                    if (xt) {
+                        OutlinedTextField(xh, { xh = it }, label = { Text("Server (host), t.ex. http://server.top:8080") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            OutlinedTextField(xu, { xu = it }, label = { Text("Användarnamn") }, singleLine = true, modifier = Modifier.weight(1f))
+                            OutlinedTextField(xp, { xp = it }, label = { Text("Lösenord") }, singleLine = true, modifier = Modifier.weight(1f))
+                        }
+                        Text("Tv-guiden hämtas automatiskt från samma server.", color = White.copy(0.55f), fontSize = 13.sp)
+                    } else {
+                        OutlinedTextField(m, { m = it }, label = { Text("M3U-länk") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(e, { e = it }, label = { Text("Tv-guide, XMLTV (valfri)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    }
                     if (vm.status.isNotEmpty()) Text(vm.status, color = Color(0xFFFFB4A9), fontSize = 15.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         val hasList = vm.channels.isNotEmpty()
                         Btn("Spara och ladda", true, if (!hasList) Modifier.focusRequester(primary) else Modifier) {
-                            if (m.isBlank()) vm.status = "Skriv in en M3U-länk först"
+                            if (xt) {
+                                if (xh.isBlank() || xu.isBlank() || xp.isBlank()) vm.status = "Fyll i server, användarnamn och lösenord"
+                                else { vm.saveUrls(Xtream.m3u(xh, xu, xp), Xtream.epg(xh, xu, xp)); vm.showSettings = false }
+                            } else if (m.isBlank()) vm.status = "Skriv in en M3U-länk först"
                             else { vm.saveUrls(m.trim(), e.trim()); vm.showSettings = false }
                         }
                         Btn("Läs in fil", false) { vm.pickFile() }
@@ -526,7 +551,7 @@ fun Settings(vm: MainVm) {
                     if (l != null) {
                         Qr(l, 190.dp)
                         Text("Skanna med mobilen", color = White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                        Text("och klistra in länken där", color = White.copy(0.6f), fontSize = 14.sp)
+                        Text("och fyll i inloggningen där", color = White.copy(0.6f), fontSize = 14.sp)
                         Text(l, color = White.copy(0.45f), fontSize = 12.sp)
                     } else Text(qrMsg, color = White.copy(0.6f), fontSize = 15.sp)
                 }
