@@ -29,6 +29,9 @@ jobs:
       - name: Döp om APK
         run: cp app/build/outputs/apk/release/app-release.apk GlassTV.apk
 
+      - name: Skriv versionsnummer
+        run: echo "${{ github.run_number }}" > version.txt
+
       - name: Spara som nedladdning i Actions
         uses: actions/upload-artifact@v4
         with:
@@ -41,4 +44,6 @@ jobs:
           tag_name: latest
           name: GlassTV senaste bygget
           prerelease: true
-          files: GlassTV.apk
+          files: |
+            GlassTV.apk
+            version.txt

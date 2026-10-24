@@ -58,6 +58,21 @@ class Repo(ctx: Context) {
         set(v) { prefs.edit().putBoolean("pv", v).apply() }
 
     private val channelCache = File(ctx.filesDir, "channels.bin")
+    private val cacheDir = ctx.cacheDir
+
+    /** Läser versionsnumret för senaste bygget på GitHub, eller null om det inte går. */
+    fun latestVersion(): Long? = try {
+        val f = File(cacheDir, "version.txt")
+        download(UPDATE_BASE + "version.txt", f) { it.trim().firstOrNull()?.isDigit() == true }
+        f.readText().trim().toLongOrNull()
+    } catch (e: Exception) { null }
+
+    /** Laddar ner senaste GlassTV.apk till appens tillfälliga mapp. */
+    fun downloadUpdate(): File {
+        val f = File(cacheDir, "update.apk")
+        download(UPDATE_BASE + "GlassTV.apk", f) { it.startsWith("PK") }
+        return f
+    }
 
     /**
      * Kanallistan sparas färdigtolkad, så att appen startar direkt utan att läsa om hela spellistan.
@@ -221,6 +236,39 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     var focusUid by mutableStateOf<Int?>(null)
     var initialFocusDone = false
     var lastCrash by mutableStateOf(repo.takeCrash())
+    var updateAvailable by mutableStateOf(false)
+    var updateStatus by mutableStateOf("")
+    private var updating = false
+
+    /** Kollar på GitHub om det finns en nyare version av appen. */
+    fun checkUpdate() {
+        viewModelScope.launch {
+            val latest = withContext(Dispatchers.IO) { repo.latestVersion() } ?: return@launch
+            if (latest > Updater.installedVersion(getApplication())) { updateStatus = ""; updateAvailable = true }
+        }
+    }
+
+    fun startUpdate() {
+        if (updating) return
+        val ctx = getApplication<Application>()
+        if (!Updater.ensurePermission(ctx)) {
+            updateStatus = "Tillåt GlassTV att installera appar, tryck sedan Tillbaka och Uppdatera igen."
+            return
+        }
+        updating = true
+        viewModelScope.launch {
+            updateStatus = "Laddar ner den nya versionen…"
+            try {
+                val apk = withContext(Dispatchers.IO) { repo.downloadUpdate() }
+                updateStatus = "Installerar…"
+                withContext(Dispatchers.IO) { Updater.install(ctx, apk) }
+                updateStatus = "Tryck Installera i rutan som visas."
+            } catch (e: Exception) {
+                updateStatus = "Uppdateringen misslyckades: ${e.message ?: e.javaClass.simpleName}"
+            }
+            updating = false
+        }
+    }
     val gridState = LazyGridState()
 
     val countries by derivedStateOf {
@@ -408,6 +456,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     // Körs sist, när alla fält ovan redan finns (viewModelScope startar direkt på huvudtråden).
     init {
         Th.theme = repo.theme; Th.accent = repo.accent; Th.anim = repo.anim; Th.preview = repo.preview
+        viewModelScope.launch { delay(6000); checkUpdate() }
         viewModelScope.launch {
             launch(Dispatchers.Default) { warmFlags() }
             channels = withContext(Dispatchers.IO) { repo.cachedChannels() }

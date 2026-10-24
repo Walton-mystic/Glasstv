@@ -92,6 +92,7 @@ fun App(vm: MainVm) {
                 if (vm.fullscreen) Fullscreen(vm) else Home(vm)
                 if (vm.showPrefs) Prefs(vm)
                 if (vm.showSettings) Settings(vm)
+                if (vm.updateAvailable && !vm.showSettings) UpdateDialog(vm)
                 vm.lastCrash?.let { CrashNote(it) { vm.lastCrash = null } }
             }
         }
@@ -585,6 +586,29 @@ fun Prefs(vm: MainVm) {
                     Btn("Avbryt", false) { cancel() }
                 }
                 Text("Grön knapp = spara · Röd knapp = avbryt · Tillbaka = avbryt", color = White.copy(0.5f), fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+/** Visas när en nyare version finns på GitHub. */
+@Composable
+fun UpdateDialog(vm: MainVm) {
+    val fr = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(150); runCatching { fr.requestFocus() } }
+    Dialog(onDismissRequest = { vm.updateAvailable = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Glass(Modifier.fillMaxWidth(0.52f), alpha = 0.2f) {
+            Column(Modifier.padding(30.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Box(Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(Brush.linearGradient(listOf(Blue, Violet))), contentAlignment = Alignment.Center) {
+                    Text("↓", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                }
+                Text("Ny version av GlassTV finns", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                Text(vm.updateStatus.ifEmpty { "Vill du uppdatera nu? Dina kanaler, favoriter och inställningar finns kvar." },
+                    color = White.copy(0.75f), fontSize = 16.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Btn("Uppdatera", true, Modifier.focusRequester(fr)) { vm.startUpdate() }
+                    Btn("Senare", false) { vm.updateAvailable = false }
+                }
             }
         }
     }

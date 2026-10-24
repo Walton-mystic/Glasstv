@@ -10,8 +10,9 @@ android {
         applicationId = "se.glasstv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // Varje bygge på GitHub får ett eget, stigande nummer så att appen vet vad som är nyast.
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
+        versionName = "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
     }
     // Fast nyckel: varje ny APK installeras ovanpå den gamla utan att favoriter och inställningar försvinner.
     signingConfigs {
