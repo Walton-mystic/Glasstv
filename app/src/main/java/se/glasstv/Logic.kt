@@ -241,11 +241,17 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     var updateStatus by mutableStateOf("")
     private var updating = false
 
-    /** Kollar på GitHub om det finns en nyare version av appen. */
-    fun checkUpdate() {
+    var updateCheckMsg by mutableStateOf("")
+
+    /** Kollar på GitHub om det finns en nyare version av appen. [manual] = knappen i inställningarna. */
+    fun checkUpdate(manual: Boolean = false) {
         viewModelScope.launch {
-            val latest = withContext(Dispatchers.IO) { repo.latestVersion() } ?: return@launch
-            if (latest > Updater.installedVersion(getApplication())) { updateStatus = ""; updateAvailable = true }
+            if (manual) updateCheckMsg = "Söker efter uppdatering…"
+            val latest = withContext(Dispatchers.IO) { repo.latestVersion() }
+            if (latest == null) { if (manual) updateCheckMsg = "Kunde inte nå GitHub just nu, försök igen om en stund."; return@launch }
+            if (latest > Updater.installedVersion(getApplication())) {
+                updateStatus = ""; updateCheckMsg = ""; updateAvailable = true
+            } else if (manual) updateCheckMsg = "Du har senaste versionen."
         }
     }
 

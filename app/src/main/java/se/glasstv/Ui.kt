@@ -583,6 +583,13 @@ fun Prefs(vm: MainVm) {
                     Text("Spellista", color = White, fontSize = 18.sp, modifier = Modifier.weight(1f))
                     Btn("Ändra länk…", false) { vm.showSettings = true }
                 }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Uppdatering", color = White, fontSize = 18.sp)
+                        Text(vm.updateCheckMsg.ifEmpty { vm.versionLabel }, color = White.copy(0.55f), fontSize = 13.sp)
+                    }
+                    Btn("Sök efter uppdatering", false) { vm.checkUpdate(manual = true) }
+                }
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)) {
                     Btn("Spara", true) { save() }
                     Btn("Avbryt", false) { cancel() }
