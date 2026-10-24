@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 
 package se.glasstv
 
@@ -13,6 +13,8 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -302,6 +304,8 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
     }
     val lastRepeat = remember { LongArray(1) }
     val reqs = remember { HashMap<Int, FocusRequester>() }
+    // Apple TV-känsla: raden man står på ligger kvar på samma höjd och rutnätet glider mjukt under den.
+    CompositionLocalProvider(LocalBringIntoViewSpec provides SmoothFocusScroll) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(5),
         state = vm.gridState,
@@ -334,6 +338,14 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
     ) {
         gridItems(list, key = { it.uid }, contentType = { 0 }) { c -> ChannelTile(vm, c, now, reqs) }
     }
+    }
+}
+
+/** Håller den markerade raden ca en tredjedel ner i rutnätet och glider dit på 260 ms. */
+private val SmoothFocusScroll = object : BringIntoViewSpec {
+    override val scrollAnimationSpec: AnimationSpec<Float> = tween(260, easing = FastOutSlowInEasing)
+    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float =
+        offset - (containerSize * 0.30f - size / 2f).coerceAtLeast(0f)
 }
 
 private fun hueOf(s: String): Float = ((s.fold(7) { a, ch -> a * 31 + ch.code } and 0x7fffffff) % 360).toFloat()
@@ -362,7 +374,13 @@ fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRe
                 .fillMaxWidth()
                 .aspectRatio(16f / 10f)
                 .graphicsLayer { scaleX = sc; scaleY = sc; translationY = (sc - 1f) * -30f }
-                .then(if (f) Modifier.shadow(26.dp, shape, ambientColor = Blue, spotColor = Blue) else Modifier)
+                .drawBehind {
+                    // Enkelt sken bakom markerad ruta (mycket lättare för TV:n än en riktig skugga).
+                    if (f) {
+                        val g = 7.dp.toPx()
+                        drawRoundRect(Blue.copy(alpha = 0.38f), Offset(-g, -g), Size(size.width + 2 * g, size.height + 2 * g), CornerRadius(29.dp.toPx()))
+                    }
+                }
                 .clip(shape)
                 .background(tileBg)
                 .background(Brush.verticalGradient(listOf(Color.White.copy(0.30f), Color.White.copy(0.05f), Color.Transparent)))
