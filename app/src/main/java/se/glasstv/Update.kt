@@ -19,6 +19,10 @@ object Updater {
         if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode else @Suppress("DEPRECATION") pi.versionCode.toLong()
     } catch (e: Exception) { 0L }
 
+    fun installedName(ctx: Context): String = try {
+        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: ""
+    } catch (e: Exception) { "" }
+
     /** Sant om appen får installera uppdateringar. Annars öppnas Androids inställning där man tillåter det. */
     fun ensurePermission(ctx: Context): Boolean {
         if (ctx.packageManager.canRequestPackageInstalls()) return true

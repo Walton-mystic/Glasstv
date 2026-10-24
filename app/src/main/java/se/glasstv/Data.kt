@@ -107,8 +107,26 @@ object M3u {
             iso(p)?.let { return nice(it) }
         }
         for (part in group.split('|', ':', '-', '/', '(', ')')) iso(part)?.let { return nice(it) }
-        val g = group.trim()
-        return g.ifBlank { "Övrigt" }
+        return groupLabel(group)
+    }
+
+    /** Regionsord som leverantörer sätter före gruppen, t.ex. "EURO | EX-YU". */
+    private val regions = setOf("EURO", "EUROPE", "ASIA", "LAME", "NAME", "AFRICA", "LATAM", "WORLD", "INT", "INTERNATIONAL")
+    private val pretty = mapOf(
+        "EX-YU" to "Ex-Yu", "EXYU" to "Ex-Yu", "ARABIC" to "Arabiska", "ARAB" to "Arabiska",
+        "EURO" to "Europa", "EUROPE" to "Europa", "ASIA" to "Asien", "AFRICA" to "Afrika",
+        "LAME" to "Latinamerika", "LATAM" to "Latinamerika", "NAME" to "Nordamerika", "CARIBBEAN" to "Karibien"
+    )
+
+    /** "EURO | EX-YU" blir "Ex-Yu", "ASIA | KURDISTAN" blir "Kurdistan". */
+    private fun groupLabel(group: String): String {
+        val parts = group.split('|').map { it.trim() }.filter { it.isNotEmpty() }
+        val label = parts.lastOrNull { it.uppercase() !in regions } ?: parts.firstOrNull() ?: return "Övrigt"
+        pretty[label.uppercase()]?.let { return it }
+        // Bara bokstäver med versaler, t.ex. "CARIBBEAN", görs om till "Caribbean". "PPV" och "XXX-VIP [18+]" lämnas.
+        return if (label.length > 3 && label.all { it.isLetter() || it == ' ' } && label == label.uppercase())
+            label.lowercase().split(' ').joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
+        else label
     }
 }
 

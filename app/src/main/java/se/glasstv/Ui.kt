@@ -141,11 +141,11 @@ fun Background(paused: Boolean = false) {
 }
 
 @Composable
-fun Glass(modifier: Modifier = Modifier, radius: Dp = 28.dp, alpha: Float = 0.10f, content: @Composable BoxScope.() -> Unit) {
+fun Glass(modifier: Modifier = Modifier, radius: Dp = 28.dp, alpha: Float = 0.10f, solid: Boolean = false, content: @Composable BoxScope.() -> Unit) {
     val shape = RoundedCornerShape(radius)
     Box(
         modifier.clip(shape)
-            .background(if (Th.light) Color.White.copy(alpha = 0.32f) else Color(0xFF111A2E).copy(alpha = 0.40f))
+            .background(if (Th.light) Color.White.copy(alpha = if (solid) 0.96f else 0.32f) else Color(0xFF111A2E).copy(alpha = if (solid) 0.95f else 0.40f))
             .background(Brush.verticalGradient(listOf(Color.White.copy(alpha + 0.07f), Color.White.copy(alpha * 0.5f))))
             .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(0.38f), Color.White.copy(0.06f))), shape),
         content = content
@@ -214,6 +214,8 @@ fun Home(vm: MainVm) {
             Glass(Modifier.fillMaxWidth().weight(1f)) { ChannelList(vm, shown, now) }
         }
     }
+    Text(vm.versionLabel, color = White.copy(0.45f), fontSize = 12.sp,
+        modifier = Modifier.align(Alignment.BottomEnd).padding(end = 34.dp, bottom = 7.dp))
     if (armed) Glass(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp), radius = 999.dp, alpha = 0.2f) {
         Text("Tryck Tillbaka igen för att avsluta", color = White, fontSize = 17.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp))
     }
@@ -500,7 +502,7 @@ fun Settings(vm: MainVm) {
     }
     LaunchedEffect(Unit) { delay(150); runCatching { primary.requestFocus() } }
     Dialog(onDismissRequest = { vm.showSettings = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Glass(Modifier.fillMaxWidth(0.82f), alpha = 0.18f) {
+        Glass(Modifier.fillMaxWidth(0.82f), alpha = 0.18f, solid = true) {
             Row(Modifier.padding(36.dp), horizontalArrangement = Arrangement.spacedBy(32.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Box(Modifier.size(60.dp).clip(RoundedCornerShape(18.dp)).background(Brush.linearGradient(listOf(Blue, Violet))), contentAlignment = Alignment.Center) { Text("📺", fontSize = 28.sp) }
@@ -568,7 +570,7 @@ fun Prefs(vm: MainVm) {
                     else -> false
                 }
             },
-            alpha = 0.18f
+            alpha = 0.18f, solid = true
         ) {
             Column(Modifier.padding(32.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("⚙ Inställningar", color = White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
@@ -597,7 +599,7 @@ fun UpdateDialog(vm: MainVm) {
     val fr = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(150); runCatching { fr.requestFocus() } }
     Dialog(onDismissRequest = { vm.updateAvailable = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Glass(Modifier.fillMaxWidth(0.52f), alpha = 0.2f) {
+        Glass(Modifier.fillMaxWidth(0.52f), alpha = 0.2f, solid = true) {
             Column(Modifier.padding(30.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Box(Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(Brush.linearGradient(listOf(Blue, Violet))), contentAlignment = Alignment.Center) {
                     Text("↓", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
@@ -620,7 +622,7 @@ fun CrashNote(text: String, onClose: () -> Unit) {
     val fr = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(150); runCatching { fr.requestFocus() } }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Glass(Modifier.fillMaxWidth(0.8f), alpha = 0.2f) {
+        Glass(Modifier.fillMaxWidth(0.8f), alpha = 0.2f, solid = true) {
             Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Appen stängdes oväntat förra gången", color = White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 Text("Ta gärna ett foto av texten nedan och skicka den, så kan felet rättas.", color = White.copy(0.7f), fontSize = 15.sp)

@@ -23,6 +23,13 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
+      - name: Skapa omslagsbild och ikon
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq librsvg2-bin
+          mkdir -p app/src/main/res/drawable-xhdpi app/src/main/res/drawable-xxxhdpi
+          rsvg-convert -w 640 -h 360 art/banner.svg -o app/src/main/res/drawable-xhdpi/banner_img.png
+          rsvg-convert -w 432 -h 432 art/icon.svg -o app/src/main/res/drawable-xxxhdpi/icon_img.png
+
       - name: Bygg APK
         run: gradle :app:assembleRelease --stacktrace
 

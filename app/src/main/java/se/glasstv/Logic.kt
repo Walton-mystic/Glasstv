@@ -24,7 +24,7 @@ import java.util.zip.GZIPInputStream
 
 const val UA = "Mozilla/5.0 (Linux; Android 12) GlassTV/1.0"
 /** Höjs när sättet att tolka spellistan ändras, så att den sparade kanallistan byggs om. */
-const val CACHE_VERSION = 2
+const val CACHE_VERSION = 3
 
 class Repo(ctx: Context) {
     private val prefs = ctx.getSharedPreferences("glasstv", Context.MODE_PRIVATE)
@@ -237,6 +237,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     var initialFocusDone = false
     var lastCrash by mutableStateOf(repo.takeCrash())
     var updateAvailable by mutableStateOf(false)
+    val versionLabel = "Version " + Updater.installedName(app)
     var updateStatus by mutableStateOf("")
     private var updating = false
 
