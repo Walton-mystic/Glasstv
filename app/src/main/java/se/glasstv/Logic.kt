@@ -140,6 +140,12 @@ class Repo(ctx: Context) {
         if (!tmp.renameTo(dest)) { tmp.copyTo(dest, overwrite = true); tmp.delete() }
     }
 
+    private val crashFile = File(ctx.filesDir, "crash.txt")
+    /** Läser och tar bort kraschloggen från förra körningen, om det finns någon. */
+    fun takeCrash(): String? = try {
+        if (crashFile.exists()) crashFile.readText().also { crashFile.delete() } else null
+    } catch (e: Exception) { null }
+
     fun loadEpg(ids: Set<String>, active: () -> Boolean): Map<String, List<Programme>> {
         if (!epgFile.exists() || ids.isEmpty()) return emptyMap()
         return try {
@@ -172,6 +178,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     /** uid för raden som ska få fokus (efter helskärm eller vid start). */
     var focusUid by mutableStateOf<Int?>(null)
     var initialFocusDone = false
+    var lastCrash by mutableStateOf(repo.takeCrash())
     val gridState = LazyGridState()
 
     val countries by derivedStateOf {

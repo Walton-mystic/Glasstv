@@ -14,9 +14,20 @@ class MainActivity : ComponentActivity() {
     private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.importFile(uri) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installCrashLog()
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent { MaterialTheme(colorScheme = darkColorScheme()) { App(vm) } }
+    }
+
+    /** Sparar orsaken om appen kraschar, så att den kan visas nästa gång appen startar. */
+    private fun installCrashLog() {
+        val file = java.io.File(filesDir, "crash.txt")
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            runCatching { file.writeText(android.util.Log.getStackTraceString(e).take(6000)) }
+            prev?.uncaughtException(t, e)
+        }
     }
 
     override fun onResume() {

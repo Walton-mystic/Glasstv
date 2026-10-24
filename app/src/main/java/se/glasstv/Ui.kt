@@ -30,7 +30,6 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
@@ -93,6 +92,7 @@ fun App(vm: MainVm) {
                 if (vm.fullscreen) Fullscreen(vm) else Home(vm)
                 if (vm.showPrefs) Prefs(vm)
                 if (vm.showSettings) Settings(vm)
+                vm.lastCrash?.let { CrashNote(it) { vm.lastCrash = null } }
             }
         }
     }
@@ -245,7 +245,7 @@ fun Rail(vm: MainVm, modifier: Modifier) {
                 }
             }
             Text("LÄNDER", color = White.copy(0.45f), fontSize = 12.sp, letterSpacing = 1.6.sp, modifier = Modifier.padding(start = 14.dp, top = 12.dp, bottom = 6.dp))
-            LazyColumn(Modifier.weight(1f).focusRestorer(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 items(vm.countries, key = { it }) { c ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         // Stjärnan ligger till vänster, så att Vänster från kanallistan landar på landet och inte råkar favorisera.
@@ -298,6 +298,7 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
         }
     }
     val lastRepeat = remember { LongArray(1) }
+    val reqs = remember { HashMap<Int, FocusRequester>() }
     LazyVerticalGrid(
         columns = GridCells.Fixed(5),
         state = vm.gridState,
@@ -316,12 +317,19 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
                 }
                 false
             }
+            // In i rutnätet: till senast valda kanal om den syns, annars första synliga rutan.
             // Bara Vänster får lämna rutnätet (till menyn). Upp/ned/höger vid kanten stannar kvar.
-            .focusRestorer()
-            .focusProperties { exit = { d -> if (d == FocusDirection.Left) FocusRequester.Default else FocusRequester.Cancel } }
+            .focusProperties {
+                enter = {
+                    vm.focused?.uid?.let { reqs[it] }
+                        ?: vm.gridState.layoutInfo.visibleItemsInfo.firstNotNullOfOrNull { info -> (info.key as? Int)?.let { k -> reqs[k] } }
+                        ?: FocusRequester.Default
+                }
+                exit = { d -> if (d == FocusDirection.Left) FocusRequester.Default else FocusRequester.Cancel }
+            }
             .focusGroup()
     ) {
-        gridItems(list, key = { it.uid }, contentType = { 0 }) { c -> ChannelTile(vm, c, now) }
+        gridItems(list, key = { it.uid }, contentType = { 0 }) { c -> ChannelTile(vm, c, now, reqs) }
     }
 }
 
@@ -329,9 +337,13 @@ private fun hueOf(s: String): Float = ((s.fold(7) { a, ch -> a * 31 + ch.code } 
 
 /** En kanal som glasikon i Apple TV-stil. Fast storlek, så rutnätet aldrig hoppar. */
 @Composable
-fun ChannelTile(vm: MainVm, c: Channel, now: Long) {
+fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRequester>) {
     val prog = vm.epg[c.id]?.firstOrNull { now >= it.start && now < it.stop }
     val fr = remember { FocusRequester() }
+    DisposableEffect(c.uid) {
+        reqs[c.uid] = fr
+        onDispose { if (reqs[c.uid] === fr) reqs.remove(c.uid) }
+    }
     if (vm.focusUid == c.uid) {
         LaunchedEffect(Unit) { delay(60); runCatching { fr.requestFocus() }; if (vm.focusUid == c.uid) vm.focusUid = null }
     }
@@ -573,6 +585,25 @@ fun Prefs(vm: MainVm) {
                     Btn("Avbryt", false) { cancel() }
                 }
                 Text("Grön knapp = spara · Röd knapp = avbryt · Tillbaka = avbryt", color = White.copy(0.5f), fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+/** Visas en gång om appen kraschade förra gången, så att felet kan fotas och skickas. */
+@Composable
+fun CrashNote(text: String, onClose: () -> Unit) {
+    val fr = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(150); runCatching { fr.requestFocus() } }
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Glass(Modifier.fillMaxWidth(0.8f), alpha = 0.2f) {
+            Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Appen stängdes oväntat förra gången", color = White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Text("Ta gärna ett foto av texten nedan och skicka den, så kan felet rättas.", color = White.copy(0.7f), fontSize = 15.sp)
+                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.Black.copy(0.35f)).padding(14.dp)) {
+                    Text(text.lines().take(14).joinToString("\n"), color = Color.White.copy(0.85f), fontSize = 12.sp, lineHeight = 15.sp)
+                }
+                Btn("OK", true, Modifier.focusRequester(fr)) { onClose() }
             }
         }
     }
