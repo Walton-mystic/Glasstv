@@ -5,7 +5,7 @@
     <uses-feature android:name="android.software.leanback" android:required="true" />
     <application
         android:label="GlassTV"
-        android:icon="@drawable/banner"
+        android:icon="@drawable/icon"
         android:banner="@drawable/banner"
         android:usesCleartextTraffic="true"
         android:hardwareAccelerated="true"
