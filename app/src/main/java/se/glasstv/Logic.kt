@@ -185,7 +185,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         val f = favorites
         val all = channels.asSequence().map { it.country }.distinct().toList()
         (if (onlyFav && f.isNotEmpty()) all.filter { it in f } else all)
-            .sortedWith(compareBy<String>({ it !in f }, { it }))
+            .sortedWith(compareBy<String>({ it !in f }, { !isCountry(it) }, { it }))
     }
     val shown by derivedStateOf {
         val s = selected

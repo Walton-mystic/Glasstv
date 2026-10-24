@@ -50,7 +50,7 @@ object M3u {
                     name = name.ifEmpty { m["tvg-name"].orEmpty() }.ifEmpty { "Kanal $uid" },
                     url = l,
                     logo = m["tvg-logo"]?.takeIf { it.isNotBlank() },
-                    country = country(code, group),
+                    country = country(code, group, name),
                     group = group
                 )
             }
@@ -62,11 +62,51 @@ object M3u {
         Locale("", code.uppercase()).getDisplayCountry(SV).ifBlank { code.uppercase() }
     }
 
-    private fun country(code: String, group: String): String {
-        if (code.length == 2) return nice(code)
-        if (code.isNotBlank()) return code
-        val g = group.substringBefore('|').substringBefore(':').trim()
-        if (g.length == 2) return nice(g)
+    /** Vanliga förkortningar i IPTV-listor som inte är ISO-koder. */
+    private val alias = mapOf(
+        "CRO" to "HR", "GER" to "DE", "SWE" to "SE", "SVE" to "SE", "SW" to "SE", "DEN" to "DK", "DAN" to "DK",
+        "NOR" to "NO", "SPA" to "ES", "ENG" to "GB", "UK" to "GB", "POR" to "PT", "SUI" to "CH", "NED" to "NL",
+        "HOL" to "NL", "SLO" to "SI", "SER" to "RS", "SRB" to "RS", "BIH" to "BA", "MNE" to "ME", "ALB" to "AL",
+        "GRE" to "GR", "EL" to "GR", "ROM" to "RO", "BUL" to "BG", "IRE" to "IE", "KSA" to "SA",
+        "UAE" to "AE", "CHI" to "CL", "LIT" to "LT", "FIN" to "FI", "ICE" to "IS", "ISL" to "IS",
+        "AUT" to "AT", "BEL" to "BE", "CZE" to "CZ", "SVK" to "SK", "HUN" to "HU", "POL" to "PL", "TUR" to "TR",
+        "RUS" to "RU", "UKR" to "UA", "USA" to "US", "CAN" to "CA", "MEX" to "MX", "BRA" to "BR", "IND" to "IN",
+        "PAK" to "PK", "AFG" to "AF", "IRN" to "IR", "IRQ" to "IQ", "KUR" to "IQ", "ITA" to "IT", "FRA" to "FR"
+    )
+    /** Kortnamn som inte är länder men ändå hör ihop, t.ex. arabiska kanaler märkta "AR:". */
+    private val labels = mapOf("AR" to "Arabiska", "ARA" to "Arabiska", "ARAB" to "Arabiska", "EXYU" to "Ex-Yu")
+    /** Ord som ser ut som landskoder men inte är det. */
+    private val notCountry = setOf("TV", "HD", "FHD", "UHD", "SD", "VIP", "PPV", "EU", "NEW", "ALL", "LIVE", "VOD", "XXX", "MY", "THE")
+    private val isoSet by lazy { Locale.getISOCountries().toHashSet() }
+    private val iso3 by lazy {
+        Locale.getISOCountries().associateBy { runCatching { Locale("", it).isO3Country.uppercase() }.getOrDefault("") }
+    }
+    private val english by lazy { Locale.getISOCountries().associateBy { Locale("", it).getDisplayCountry(Locale.ENGLISH).uppercase() } }
+    private val prefix = Regex("""^\W*([A-Za-z]{2,4})\s*[:|\-]\s*""")
+
+    /** Gör om "CRO", "se", "SWE" eller "Croatia" till en ISO-kod, eller null om det inte är ett land. */
+    private fun iso(raw: String): String? {
+        val u = raw.trim().uppercase()
+        if (u.isEmpty() || u in notCountry) return null
+        alias[u]?.let { return it }
+        if (u.length == 2 && u in isoSet) return u
+        if (u.length == 3) iso3[u]?.let { return it }
+        return english[u]
+    }
+
+    /**
+     * Landet hämtas i första hand från tvg-country, sedan från början av kanalnamnet ("CRO: Mini TV"),
+     * sedan från gruppnamnet ("EURO | Croatia"). Hittas inget land används gruppnamnet som det är.
+     */
+    private fun country(code: String, group: String, name: String): String {
+        if (code.length == 2 && code.uppercase() in isoSet) return nice(code)
+        iso(code)?.let { return nice(it) }
+        prefix.find(name)?.groupValues?.get(1)?.uppercase()?.let { p ->
+            labels[p]?.let { return it }
+            iso(p)?.let { return nice(it) }
+        }
+        for (part in group.split('|', ':', '-', '/', '(', ')')) iso(part)?.let { return nice(it) }
+        val g = group.trim()
         return g.ifBlank { "Övrigt" }
     }
 }
@@ -159,6 +199,9 @@ fun flag(name: String): String {
     if (c.length != 2) return "🌍"
     return String(Character.toChars(0x1F1E6 + (c[0] - 'A'))) + String(Character.toChars(0x1F1E6 + (c[1] - 'A')))
 }
+
+/** Sant för riktiga länder (de som har en flagga), falskt för grupper som "EURO". */
+fun isCountry(name: String): Boolean = flagMap.containsKey(name)
 
 /** Förbered flaggtabellen i bakgrunden så att första ritningen inte hackar. */
 fun warmFlags() { flagMap.size }
