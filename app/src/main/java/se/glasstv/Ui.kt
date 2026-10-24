@@ -428,6 +428,8 @@ fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRe
 /** Panelen överst: livebild till vänster, kanal och tv-guide till höger. */
 @Composable
 fun Info(vm: MainVm, c: Channel?, now: Long) {
+    Box(Modifier.fillMaxSize()) {
+    Clock(Modifier.align(Alignment.TopEnd).padding(top = 14.dp, end = 24.dp))
     Row(Modifier.fillMaxSize().padding(18.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
         Box(Modifier.fillMaxHeight().aspectRatio(16f / 9f, matchHeightConstraintsFirst = true).clip(RoundedCornerShape(18.dp)).background(Color.Black.copy(0.5f))) {
             if (!Th.preview) Text("Livebild avstängd", color = Color.White.copy(0.5f), fontSize = 14.sp, modifier = Modifier.align(Alignment.Center))
@@ -465,6 +467,16 @@ fun Info(vm: MainVm, c: Channel?, now: Long) {
             }
         }
     }
+    }
+}
+
+/** Klockan i realtid. Uppdateras precis när minuten byts, så den kostar nästan ingenting. */
+@Composable
+fun Clock(modifier: Modifier = Modifier) {
+    val t by produceState(System.currentTimeMillis()) {
+        while (true) { value = System.currentTimeMillis(); delay(60_000 - value % 60_000 + 50) }
+    }
+    Text(hm(t), color = White, fontSize = 30.sp, fontWeight = FontWeight.SemiBold, modifier = modifier)
 }
 
 @Composable
