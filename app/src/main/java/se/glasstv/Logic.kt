@@ -87,7 +87,20 @@ class Repo(ctx: Context) {
      * Följer omdirigeringar mellan http och https själv, och kräver status 200.
      * En felsida från leverantören ("konto utgånget") skriver alltså aldrig över en fungerande lista.
      */
+    /**
+     * Många IPTV-servrar har bara http på sin port (t.ex. :8080). Är länken skriven med https
+     * och servern inte svarar med TLS, provas samma adress automatiskt med http.
+     */
     private fun download(start: String, dest: File, looksValid: (String) -> Boolean) {
+        try {
+            downloadOnce(start, dest, looksValid)
+        } catch (e: javax.net.ssl.SSLException) {
+            if (!start.startsWith("https://", ignoreCase = true)) throw e
+            downloadOnce("http://" + start.substring(8), dest, looksValid)
+        }
+    }
+
+    private fun downloadOnce(start: String, dest: File, looksValid: (String) -> Boolean) {
         var url = URL(start)
         var c: HttpURLConnection? = null
         for (hop in 0 until 6) {
