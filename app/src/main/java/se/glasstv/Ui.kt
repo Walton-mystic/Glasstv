@@ -375,16 +375,20 @@ fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRe
                 .aspectRatio(16f / 10f)
                 .graphicsLayer { scaleX = sc; scaleY = sc; translationY = (sc - 1f) * -30f }
                 .drawBehind {
-                    // Enkelt sken bakom markerad ruta (mycket lättare för TV:n än en riktig skugga).
+                    // Mjukt sken bakom markerad ruta: flera tunna lager som tonar ut (lätt för TV:n).
                     if (f) {
-                        val g = 7.dp.toPx()
-                        drawRoundRect(Blue.copy(alpha = 0.38f), Offset(-g, -g), Size(size.width + 2 * g, size.height + 2 * g), CornerRadius(29.dp.toPx()))
+                        val step = 2.5.dp.toPx(); val r = 22.dp.toPx()
+                        for (i in 7 downTo 1) {
+                            val g = step * i
+                            drawRoundRect(Blue.copy(alpha = 0.07f * (8 - i) / 7f), Offset(-g, -g),
+                                Size(size.width + 2 * g, size.height + 2 * g), CornerRadius(r + g))
+                        }
                     }
                 }
                 .clip(shape)
                 .background(tileBg)
                 .background(Brush.verticalGradient(listOf(Color.White.copy(0.30f), Color.White.copy(0.05f), Color.Transparent)))
-                .border(if (f) 3.dp else 1.dp, Color.White.copy(if (f) 0.9f else 0.35f), shape)
+                .border(if (f) 2.dp else 1.dp, Color.White.copy(if (f) 0.85f else 0.35f), shape)
                 .focusRequester(fr)
                 .onFocusChanged { f = it.isFocused; if (it.isFocused) vm.focused = c }
                 .clickable { vm.open(c) },
