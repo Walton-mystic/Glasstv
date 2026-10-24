@@ -8,6 +8,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import coil.Coil
+import coil.ImageLoader
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
 
 class MainActivity : ComponentActivity() {
     private val vm: MainVm by viewModels()
@@ -16,6 +20,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installCrashLog()
         super.onCreate(savedInstanceState)
+        // Kanalloggor sparas på TV:n (upp till 200 MB) och återanvänds, även om servern säger att de inte får sparas.
+        val app = applicationContext
+        Coil.setImageLoader(
+            ImageLoader.Builder(app)
+                .respectCacheHeaders(false)
+                .memoryCache { MemoryCache.Builder(app).maxSizePercent(0.25).build() }
+                .diskCache { DiskCache.Builder().directory(app.filesDir.resolve("logos")).maxSizeBytes(200L * 1024 * 1024).build() }
+                .allowRgb565(true)
+                .crossfade(false)
+                .build()
+        )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent { MaterialTheme(colorScheme = darkColorScheme()) { App(vm) } }
     }

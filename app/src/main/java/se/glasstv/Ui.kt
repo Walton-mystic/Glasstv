@@ -55,6 +55,10 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.CachePolicy
+import coil.request.ImageRequest
+import androidx.compose.ui.platform.LocalContext
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.delay
@@ -300,6 +304,16 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
         if (!vm.initialFocusDone && !vm.showSettings && !vm.showPrefs) {
             vm.initialFocusDone = true
             vm.focusUid = (vm.focused?.takeIf { f -> list.any { it.uid == f.uid } } ?: list.first()).uid
+        }
+    }
+    // Hämta loggorna i förväg i bakgrunden, så att de redan finns sparade när man scrollar.
+    val ctx = LocalContext.current
+    LaunchedEffect(list) {
+        delay(3000)
+        val loader = ctx.imageLoader
+        for (c in list.take(400)) {
+            val logo = c.logo ?: continue
+            loader.enqueue(ImageRequest.Builder(ctx).data(logo).size(240).memoryCachePolicy(CachePolicy.DISABLED).build())
         }
     }
     val lastRepeat = remember { LongArray(1) }
