@@ -1,0 +1,44 @@
+name: Bygg APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Bygg APK
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Döp om APK
+        run: cp app/build/outputs/apk/release/app-release.apk GlassTV.apk
+
+      - name: Spara som nedladdning i Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: GlassTV-apk
+          path: GlassTV.apk
+
+      - name: Publicera som "latest"-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: GlassTV senaste bygget
+          prerelease: true
+          files: GlassTV.apk
