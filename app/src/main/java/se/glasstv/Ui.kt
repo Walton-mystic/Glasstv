@@ -69,6 +69,9 @@ import kotlinx.coroutines.launch
 import kotlin.math.cos
 import kotlin.math.sin
 
+/** Så länge OK hålls in på en kanal innan den läggs till eller tas bort som favoritkanal. */
+const val FAV_HOLD_MS = 4_000L
+
 private fun hm(ms: Long) = DateFormat.format("HH:mm", ms).toString()
 object Th {
     var theme by mutableIntStateOf(0)      // 0 mörkt, 1 ljust, 2 auto
@@ -287,6 +290,38 @@ fun Rail(vm: MainVm, modifier: Modifier) {
                     }
                 }
             }
+            // Favoritläget: nedre halvan av menyn visar favoritkanalerna, så att de nås direkt.
+            if (vm.onlyFav) {
+                Text("FAVORITKANALER", color = White.copy(0.45f), fontSize = 12.sp, letterSpacing = 1.6.sp, modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 6.dp))
+                val favs = vm.favChannelList
+                if (favs.isEmpty()) Box(Modifier.weight(1f)) {
+                    Text("Håll in OK på en kanal i ${FAV_HOLD_MS / 1000} sekunder för att lägga till den här.",
+                        color = White.copy(0.55f), fontSize = 13.sp, modifier = Modifier.padding(horizontal = 14.dp))
+                }
+                else LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    items(favs, key = { "f" + it.url }) { c ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Focusable(onClick = {
+                                vm.toggleFavChannel(c)
+                                scope.launch { delay(50); runCatching { allReq.requestFocus() } }
+                            }, modifier = Modifier.padding(end = 4.dp)) {
+                                Text("★", fontSize = 18.sp, color = Color(0xFFFFD60A), modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp))
+                            }
+                            Focusable(onClick = { vm.open(c) }, modifier = Modifier.weight(1f), selected = vm.playing?.url == c.url,
+                                onFocus = { vm.focused = c }) {
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Box(Modifier.size(width = 40.dp, height = 26.dp).clip(RoundedCornerShape(7.dp)).background(White.copy(0.1f)), contentAlignment = Alignment.Center) {
+                                        if (c.logo != null) AsyncImage(c.logo, null, Modifier.fillMaxSize().padding(2.dp), contentScale = ContentScale.Fit)
+                                        else Text(c.name.take(2), color = White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Spacer(Modifier.width(10.dp))
+                                    Text(c.name, color = White, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 8.dp)) {
                 Focusable(onClick = { vm.refresh(notify = true) }, modifier = Modifier.weight(1f)) {
                     Text("↻ Uppdatera", color = White, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
@@ -397,6 +432,18 @@ fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRe
     val tileBg = remember(hue) { Brush.linearGradient(listOf(Color.hsv(hue, 0.62f, 0.62f), Color.hsv((hue + 40f) % 360f, 0.6f, 0.36f))) }
     val shape = RoundedCornerShape(22.dp)
     var logoOk by remember(c.logo) { mutableStateOf(false) }
+    // Håll in OK för att favoritmarkera: en gul linje fylls på medan man håller, kort tryck öppnar kanalen.
+    var hold by remember { mutableStateOf(false) }
+    var held by remember { mutableStateOf(false) }
+    val holdP = remember { Animatable(0f) }
+    LaunchedEffect(hold) {
+        if (hold) {
+            holdP.snapTo(0f)
+            holdP.animateTo(1f, tween(FAV_HOLD_MS.toInt(), easing = LinearEasing))
+            vm.toggleFavChannel(c); held = true; hold = false
+        } else holdP.snapTo(0f)
+    }
+    val isFav = c.url in vm.favChannels
     Column(modifier.zIndex(if (f) 1f else 0f), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
@@ -419,7 +466,15 @@ fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRe
                 .background(Brush.verticalGradient(listOf(Color.White.copy(0.30f), Color.White.copy(0.05f), Color.Transparent)))
                 .border(if (f) 2.dp else 1.dp, Color.White.copy(if (f) 0.85f else 0.35f), shape)
                 .focusRequester(fr)
-                .onFocusChanged { f = it.isFocused; if (it.isFocused) vm.focused = c }
+                .onFocusChanged { f = it.isFocused; if (it.isFocused) vm.focused = c else hold = false }
+                .onPreviewKeyEvent { e ->
+                    if (e.key != Key.DirectionCenter && e.key != Key.Enter && e.key != Key.NumPadEnter) return@onPreviewKeyEvent false
+                    when (e.type) {
+                        KeyEventType.KeyDown -> { if (e.nativeKeyEvent.repeatCount == 0) { held = false; hold = true }; true }
+                        KeyEventType.KeyUp -> { val wasHeld = held; hold = false; held = false; if (!wasHeld) vm.open(c); true }
+                        else -> false
+                    }
+                }
                 .clickable { vm.open(c) },
             contentAlignment = Alignment.Center
         ) {
@@ -433,6 +488,9 @@ fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRe
                 Text(n, color = Color.White, fontSize = size, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center,
                     maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = size * 1.1f, modifier = Modifier.padding(horizontal = 10.dp))
             }
+            if (isFav) Text("★", color = Color(0xFFFFD60A), fontSize = if (small) 12.sp else 15.sp,
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 5.dp, end = 9.dp))
+            if (holdP.value > 0f) Box(Modifier.align(Alignment.BottomStart).fillMaxWidth(holdP.value).height(5.dp).background(Color(0xFFFFD60A)))
         }
         Spacer(Modifier.height(8.dp))
         // Kanalnamnet står alltid kvar under rutan; programmet som går nu under det (om tv-guide finns).

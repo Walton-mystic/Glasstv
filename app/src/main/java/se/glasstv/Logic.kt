@@ -44,6 +44,10 @@ class Repo(ctx: Context) {
     var favorites: Set<String>
         get() = prefs.getStringSet("fav", emptySet())?.toSet() ?: emptySet()
         set(v) { prefs.edit().putStringSet("fav", v).apply() }
+    /** Favoritkanaler, sparade med kanalens adress. */
+    var favChannels: Set<String>
+        get() = prefs.getStringSet("favCh", emptySet())?.toSet() ?: emptySet()
+        set(v) { prefs.edit().putStringSet("favCh", v).apply() }
     var onlyFav: Boolean
         get() = prefs.getBoolean("onlyFav", false)
         set(v) { prefs.edit().putBoolean("onlyFav", v).apply() }
@@ -490,6 +494,23 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         if (selected != null && selected !in countries) selected = null
         reloadEpg()
     }
+    var favChannels by mutableStateOf(repo.favChannels); private set
+
+    /** Lägger till eller tar bort en favoritkanal (hålls in OK på en kanalruta, eller stjärnan i menyn). */
+    fun toggleFavChannel(c: Channel) {
+        val add = c.url !in favChannels
+        favChannels = if (add) favChannels + c.url else favChannels - c.url
+        repo.favChannels = favChannels
+        toast = if (add) "★ ${c.name} tillagd i favoritkanaler" else "${c.name} borttagen från favoritkanaler"
+    }
+
+    /** Favoritkanalerna i namnordning, som visas i menyn i favoritläget. */
+    val favChannelList by derivedStateOf {
+        val f = favChannels
+        if (f.isEmpty()) emptyList()
+        else channels.filter { it.url in f }.distinctBy { it.url }.sortedBy { sortKey(it.name) }
+    }
+
     fun toggleOnlyFav() { onlyFav = !onlyFav; repo.onlyFav = onlyFav; select(null); reloadEpg() }
     fun select(c: String?) {
         selected = c; focused = null
