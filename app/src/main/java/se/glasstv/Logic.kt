@@ -23,8 +23,12 @@ import java.net.URL
 import java.util.zip.GZIPInputStream
 
 const val UA = "Mozilla/5.0 (Linux; Android 12) GlassTV/1.0"
+const val MAX_PROFILES = 5
+
+/** En sparad spellista (server). Upp till [MAX_PROFILES] kan sparas, en i taget används. */
+data class Profile(val name: String, val m3u: String, val epg: String)
 /** Höjs när sättet att tolka spellistan ändras, så att den sparade kanallistan byggs om. */
-const val CACHE_VERSION = 3
+const val CACHE_VERSION = 5
 
 class Repo(ctx: Context) {
     private val prefs = ctx.getSharedPreferences("glasstv", Context.MODE_PRIVATE)
@@ -44,6 +48,20 @@ class Repo(ctx: Context) {
         get() = prefs.getBoolean("onlyFav", false)
         set(v) { prefs.edit().putBoolean("onlyFav", v).apply() }
 
+    var profiles: List<Profile>
+        get() = try {
+            val a = org.json.JSONArray(prefs.getString("profiles", "[]"))
+            (0 until a.length()).map { val o = a.getJSONObject(it); Profile(o.optString("name"), o.optString("m3u"), o.optString("epg")) }
+        } catch (e: Exception) { emptyList() }
+        set(v) {
+            val a = org.json.JSONArray()
+            v.forEach { a.put(org.json.JSONObject().put("name", it.name).put("m3u", it.m3u).put("epg", it.epg)) }
+            prefs.edit().putString("profiles", a.toString()).apply()
+        }
+    var activeProfile: Int
+        get() = prefs.getInt("activeProfile", 0)
+        set(v) { prefs.edit().putInt("activeProfile", v).apply() }
+
     var theme: Int
         get() = prefs.getInt("theme", 0)
         set(v) { prefs.edit().putInt("theme", v).apply() }
@@ -56,6 +74,19 @@ class Repo(ctx: Context) {
     var preview: Boolean
         get() = prefs.getBoolean("pv", true)
         set(v) { prefs.edit().putBoolean("pv", v).apply() }
+    /** Hur många sekunder man tittat på varje kanal (nyckel = kanalens adress). */
+    var watchStats: Map<String, Long>
+        get() = try {
+            val o = org.json.JSONObject(prefs.getString("watch", "{}") ?: "{}")
+            o.keys().asSequence().associateWith { o.optLong(it) }
+        } catch (e: Exception) { emptyMap() }
+        set(v) {
+            val o = org.json.JSONObject(); v.forEach { (k, s) -> o.put(k, s) }
+            prefs.edit().putString("watch", o.toString()).apply()
+        }
+    var sortAz: Boolean
+        get() = prefs.getBoolean("sortAz", true)
+        set(v) { prefs.edit().putBoolean("sortAz", v).apply() }
 
     private val channelCache = File(ctx.filesDir, "channels.bin")
     private val cacheDir = ctx.cacheDir
@@ -174,7 +205,14 @@ class Repo(ctx: Context) {
                 url = URL(url, loc)
                 continue
             }
-            if (code != 200) { conn.disconnect(); throw IOException("Servern svarade $code") }
+            if (code != 200) {
+                conn.disconnect()
+                throw IOException(when {
+                    code == 401 || code == 403 -> "inloggningen nekades (fel $code), kontrollera användarnamn och lösenord"
+                    code >= 500 -> "leverantörens server svarar inte just nu (fel $code), försök igen senare"
+                    else -> "servern svarade $code"
+                })
+            }
             c = conn
             break
         }
@@ -284,11 +322,22 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         (if (onlyFav && f.isNotEmpty()) all.filter { it in f } else all)
             .sortedWith(compareBy<String>({ it !in f }, { !isCountry(it) }, { it }))
     }
+    /** Antal kanaler per land/grupp, som visas i menyn. */
+    val countryCounts by derivedStateOf { channels.groupingBy { it.country }.eachCount() }
+
     val shown by derivedStateOf {
         val s = selected
         val cs = countries
-        if (s != null && s in cs) channels.filter { it.country == s }
-        else { val set = cs.toHashSet(); channels.filter { it.country in set } }
+        val base = if (s != null && s in cs) channels.filter { it.country == s }
+            else { val set = cs.toHashSet(); channels.filter { it.country in set } }
+        if (!Th.sortAz) base
+        else {
+            // A–Ö inom varje land; länderna ligger kvar i samma ordning som i menyn.
+            val order = HashMap<String, Int>(cs.size * 2).also { m -> cs.forEachIndexed { i, c -> m[c] = i } }
+            base.map { Triple(order[it.country] ?: Int.MAX_VALUE, sortKey(it.name), it) }
+                .sortedWith(compareBy<Triple<Int, String, Channel>>({ it.first }, { it.second }))
+                .map { it.third }
+        }
     }
 
     private val http = DefaultHttpDataSource.Factory()
@@ -333,27 +382,89 @@ class MainVm(app: Application) : AndroidViewModel(app) {
 
     private var refreshJob: Job? = null
     /** Hämtar spellistan på nytt. Tv-guiden hämtas bara om den är gammal, eller om [force] (knappen ↻). */
-    fun refresh(force: Boolean = true) {
-        if (refreshJob?.isActive == true) return
+    /** Kort besked längst ner på skärmen. Slutar texten med "…" ligger den kvar tills nästa besked. */
+    var toast by mutableStateOf<String?>(null)
+    /** Spellista som skickats från mobilen och väntar på att bekräftas på TV:n. */
+    var pendingPlaylist by mutableStateOf<Pair<String, String>?>(null)
+
+    /**
+     * Hämtar spellistan på nytt. Tv-guiden hämtas bara om den är gammal, eller om [force] (knappen ↻).
+     * [notify] = visa besked på skärmen (när användaren själv bett om det).
+     */
+    fun refresh(force: Boolean = true, notify: Boolean = false) {
+        if (refreshJob?.isActive == true) { if (notify) toast = "Hämtar redan kanaler…"; return }
         refreshJob = viewModelScope.launch {
             status = "Uppdaterar…"
+            if (notify) toast = "Hämtar kanaler…"
             val errors = ArrayList<String>()
+            var listOk = false
             if (repo.m3uUrl.isNotBlank()) try {
                 val list = withContext(Dispatchers.IO) { repo.downloadPlaylist() }
-                if (list.isEmpty()) errors += "spellistan var tom" else if (list != channels) channels = list
+                if (list.isEmpty()) errors += "spellistan var tom" else { listOk = true; if (list != channels) channels = list }
             } catch (e: Exception) { errors += "spellistan: ${e.message ?: e.javaClass.simpleName}" }
-            if (repo.epgUrl.isNotBlank() && (force || !repo.epgFresh())) try {
-                withContext(Dispatchers.IO) { repo.downloadEpg() }
-            } catch (e: Exception) { errors += "tv-guiden: ${e.message ?: e.javaClass.simpleName}" }
+            var epgFailed = false
+            if (repo.epgUrl.isNotBlank() && (force || !repo.epgFresh())) {
+                if (notify && listOk) toast = "✓ ${channels.size} kanaler hämtade – hämtar tv-guiden…"
+                try {
+                    withContext(Dispatchers.IO) { repo.downloadEpg() }
+                } catch (e: Exception) { epgFailed = true; errors += "tv-guiden: ${e.message ?: e.javaClass.simpleName}" }
+            }
             status = if (errors.isEmpty()) "" else "Kunde inte uppdatera " + errors.joinToString(", ")
+            if (notify) toast = when {
+                listOk && !epgFailed -> "✓ ${channels.size} kanaler hämtade" + if (repo.epgUrl.isNotBlank()) " med tv-guide" else ""
+                listOk -> "✓ ${channels.size} kanaler hämtade (tv-guiden kunde inte hämtas just nu)"
+                else -> "Kunde inte hämta kanalerna: " + errors.first().substringAfter(": ")
+            }
             reloadEpg()
+        }
+    }
+
+    var profiles by mutableStateOf(repo.profiles); private set
+    var activeProfile by mutableIntStateOf(repo.activeProfile); private set
+    /** Vilken spellista inställningsrutan redigerar: index, -1 = ny, null = (första start) ny. */
+    var editProfile by mutableStateOf<Int?>(null)
+
+    private fun profileName(m3u: String): String =
+        Xtream.parse(m3u)?.let { it.first.substringAfter("://") + " · " + it.second }
+            ?: runCatching { java.net.URL(m3u).host }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Spellista"
+
+    /** Sparar en spellista. Ny spellista, eller ändring av den som används, laddas direkt. */
+    fun saveProfile(index: Int, m3u: String, epg: String) {
+        val p = Profile(profileName(m3u), m3u, epg)
+        val list = profiles.toMutableList()
+        val isNew = index !in list.indices
+        val i = when {
+            !isNew -> { list[index] = p; index }
+            list.size < MAX_PROFILES -> { list += p; list.lastIndex }
+            else -> { val a = activeProfile.coerceIn(list.indices); list[a] = p; a }
+        }
+        profiles = list; repo.profiles = list
+        if (isNew || i == activeProfile) useProfile(i)
+    }
+
+    /** Byter till spellista [i] och hämtar dess kanaler. */
+    fun useProfile(i: Int) {
+        val p = profiles.getOrNull(i) ?: return
+        activeProfile = i; repo.activeProfile = i
+        saveUrls(p.m3u, p.epg)
+    }
+
+    fun deleteProfile(i: Int) {
+        if (i !in profiles.indices) return
+        val list = profiles.toMutableList().also { it.removeAt(i) }
+        profiles = list; repo.profiles = list
+        when {
+            list.isEmpty() -> { activeProfile = 0; repo.activeProfile = 0 }
+            i == activeProfile -> useProfile(0)
+            i < activeProfile -> { activeProfile -= 1; repo.activeProfile = activeProfile }
         }
     }
 
     fun saveUrls(m3u: String, epgUrl: String) {
         repo.m3uUrl = m3u; repo.epgUrl = epgUrl
         refreshJob?.cancel()
-        refresh()
+        refreshJob = null
+        refresh(notify = true)
     }
 
     /** En guide-tolkning åt gången; en ny avbryter den gamla på riktigt. */
@@ -412,14 +523,41 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         if (!fullscreen && player.playbackState != Player.STATE_IDLE) player.stop()
     }
 
-    fun open(c: Channel) { preview(c); quality(true); player.volume = 1f; fullscreen = true }
+    var watchStats by mutableStateOf(repo.watchStats); private set
+    private var watching: Channel? = null
+    private var watchStart = 0L
+
+    private fun startWatch(c: Channel) { endWatch(); watching = c; watchStart = System.currentTimeMillis() }
+
+    /** Lägger till tittartiden för kanalen man just lämnat. Under 15 sekunder (zappning) räknas inte. */
+    private fun endWatch() {
+        val c = watching ?: return
+        watching = null
+        val secs = ((System.currentTimeMillis() - watchStart) / 1000).coerceIn(0L, 4L * 3600)
+        if (secs < 15) return
+        val m = watchStats.toMutableMap()
+        m[c.url] = (m[c.url] ?: 0L) + secs
+        val kept = if (m.size > 300) m.entries.sortedByDescending { it.value }.take(200).associate { it.key to it.value } else m
+        watchStats = kept; repo.watchStats = kept
+    }
+
+    /** Upp till 10 mest sedda kanaler bland dem som visas just nu (minst en minuts tittande). */
+    val topChannels by derivedStateOf {
+        val st = watchStats
+        if (st.isEmpty()) emptyList()
+        else shown.filter { (st[it.url] ?: 0L) >= 60 }.sortedByDescending { st[it.url] ?: 0L }.take(10)
+    }
+
+    fun open(c: Channel) { preview(c); quality(true); player.volume = 1f; fullscreen = true; startWatch(c) }
 
     fun exitFull() {
+        endWatch()
         fullscreen = false; player.volume = 0f; quality(false)
         val p = playing
         focused = p
         if (!Th.preview) player.stop()
-        val i = if (p == null) -1 else shown.indexOfFirst { it.uid == p.uid }
+        // Raden "Mest sedda" ligger först i rutnätet, så kanalernas plats är en steg längre ned när den visas.
+        val i = if (p == null) -1 else shown.indexOfFirst { it.uid == p.uid }.let { if (it >= 0 && topChannels.isNotEmpty()) it + 1 else it }
         viewModelScope.launch {
             if (i >= 0) runCatching { gridState.scrollToItem(i, -200) }
             focusUid = p?.uid
@@ -434,6 +572,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         val i = l.indexOfFirst { it.uid == playing?.uid }
         val n = if (i < 0) (if (d > 0) 0 else l.lastIndex) else (i + d + l.size) % l.size
         preview(l[n])
+        if (fullscreen) startWatch(l[n])
     }
 
     fun onPreviewSetting(on: Boolean) { if (!on && !fullscreen) player.stop() }
@@ -441,8 +580,9 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     fun onStart() {
         foreground = true
         if (playing != null && (fullscreen || Th.preview)) runCatching { player.seekToDefaultPosition(); player.prepare(); player.play() }
+        if (fullscreen) playing?.let { startWatch(it) }
     }
-    fun onStop() { foreground = false; retryJob?.cancel(); player.stop() }
+    fun onStop() { endWatch(); foreground = false; retryJob?.cancel(); player.stop() }
 
     var pickFile: () -> Unit = {}
     fun importFile(uri: android.net.Uri) {
@@ -462,7 +602,12 @@ class MainVm(app: Application) : AndroidViewModel(app) {
 
     // Körs sist, när alla fält ovan redan finns (viewModelScope startar direkt på huvudtråden).
     init {
-        Th.theme = repo.theme; Th.accent = repo.accent; Th.anim = repo.anim; Th.preview = repo.preview
+        Th.theme = repo.theme; Th.accent = repo.accent; Th.anim = repo.anim; Th.preview = repo.preview; Th.sortAz = repo.sortAz
+        // Den spellista man redan hade blir spellista nummer 1.
+        if (profiles.isEmpty() && repo.m3uUrl.isNotBlank()) {
+            val p = listOf(Profile(profileName(repo.m3uUrl), repo.m3uUrl, repo.epgUrl))
+            profiles = p; repo.profiles = p; activeProfile = 0; repo.activeProfile = 0
+        }
         viewModelScope.launch { delay(6000); checkUpdate() }
         viewModelScope.launch {
             launch(Dispatchers.Default) { warmFlags() }

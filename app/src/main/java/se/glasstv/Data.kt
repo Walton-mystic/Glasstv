@@ -45,13 +45,14 @@ object M3u {
                 val name = inf.substring(maxOf(inf.lastIndexOf('"'), 0)).substringAfter(',', "").trim()
                 val group = m["group-title"].orEmpty()
                 val code = m["tvg-country"]?.split(';', ',')?.firstOrNull()?.trim().orEmpty()
+                val full = name.ifEmpty { m["tvg-name"].orEmpty() }.ifEmpty { "Kanal ${uid + 1}" }
                 out += Channel(
                     uid = uid++,
                     id = m["tvg-id"].orEmpty(),
-                    name = name.ifEmpty { m["tvg-name"].orEmpty() }.ifEmpty { "Kanal $uid" },
+                    name = cleanName(full),
                     url = l,
                     logo = m["tvg-logo"]?.takeIf { it.isNotBlank() },
-                    country = country(code, group, name),
+                    country = country(code, group, full),
                     group = group
                 )
             }
@@ -107,7 +108,48 @@ object M3u {
             iso(p)?.let { return nice(it) }
         }
         for (part in group.split('|', ':', '-', '/', '(', ')')) iso(part)?.let { return nice(it) }
+        fromWords(group)?.let { return nice(it) }
         return groupLabel(group)
+    }
+
+    /** Landsnamn på originalspråk och vanliga varianter som leverantörer skriver i gruppnamn. */
+    private val native = mapOf(
+        "SHQIP" to "AL", "SHQIPERIA" to "AL", "SHQIPËRIA" to "AL", "KOSOVO" to "XK", "KOSOVA" to "XK",
+        "DEUTSCHLAND" to "DE", "ESPANA" to "ES", "ESPAÑA" to "ES", "SVERIGE" to "SE", "SUOMI" to "FI",
+        "NORGE" to "NO", "DANMARK" to "DK", "ITALIA" to "IT", "POLSKA" to "PL", "HRVATSKA" to "HR",
+        "SRBIJA" to "RS", "TURKIYE" to "TR", "TÜRKIYE" to "TR", "HOLLAND" to "NL", "GREEK" to "GR",
+        "ENGLAND" to "GB", "BRITAIN" to "GB", "CZECH" to "CZ", "BOSNIA" to "BA", "USA" to "US",
+        "UK" to "GB", "UAE" to "AE", "KSA" to "SA",
+        // Folkslag/förkortningar: "Turk Spor", "German Kids", "Polish Movies"
+        "TURK" to "TR", "TÜRK" to "TR", "TURKISH" to "TR", "GERMAN" to "DE", "FRENCH" to "FR",
+        "ITALIAN" to "IT", "SPANISH" to "ES", "POLISH" to "PL", "ALBANIAN" to "AL", "SWEDISH" to "SE",
+        "DUTCH" to "NL", "PORTUGUESE" to "PT", "ROMANIAN" to "RO", "BULGARIAN" to "BG", "HUNGARIAN" to "HU",
+        "CROATIAN" to "HR", "SERBIAN" to "RS", "DANISH" to "DK", "NORWEGIAN" to "NO", "FINNISH" to "FI",
+        // Felstavningar och lokala namn
+        "MALASIA" to "MY", "PHILIPINES" to "PH", "PHILLIPINES" to "PH", "NEDERLAND" to "NL", "BELGIE" to "BE",
+        "BELGIQUE" to "BE", "SCHWEIZ" to "CH", "SUISSE" to "CH", "ÖSTERREICH" to "AT", "OSTERREICH" to "AT",
+        "KOREA" to "KR", "PORTUGAL" to "PT", "BRASIL" to "BR", "MAGYAR" to "HU", "EIRE" to "IE",
+        "RUSSIAN" to "RU", "UKRAINIAN" to "UA", "PERSIAN" to "IR", "INDIAN" to "IN", "PAKISTANI" to "PK"
+    )
+    private val word = Regex("""[^\p{L}]+""")
+
+    /** Hittar ett land som hela ord i gruppnamnet: "France Sports", "Albania Femijet", "ITALY PPV-LIVE". */
+    private fun fromWords(text: String): String? {
+        val w = text.split(word).filter { it.isNotEmpty() }.map { it.uppercase() }
+        for (n in 3 downTo 1) for (i in 0..w.size - n) {
+            val k = w.subList(i, i + n).joinToString(" ")
+            native[k]?.let { return it }
+            if (k.length >= 4) english[k]?.let { return it }
+        }
+        return null
+    }
+
+    /** Tar bort landsprefixet: "AL| TELE ONE 1 HD" blir "TELE ONE 1 HD". Prefix som inte är länder lämnas. */
+    private fun cleanName(n: String): String {
+        val mt = prefix.find(n) ?: return n
+        val p = mt.groupValues[1].uppercase()
+        if (labels[p] == null && iso(p) == null) return n
+        return n.substring(mt.range.last + 1).trim().ifEmpty { n }
     }
 
     /** Regionsord som leverantörer sätter före gruppen, t.ex. "EURO | EX-YU". */
@@ -115,7 +157,8 @@ object M3u {
     private val pretty = mapOf(
         "EX-YU" to "Ex-Yu", "EXYU" to "Ex-Yu", "ARABIC" to "Arabiska", "ARAB" to "Arabiska",
         "EURO" to "Europa", "EUROPE" to "Europa", "ASIA" to "Asien", "AFRICA" to "Afrika",
-        "LAME" to "Latinamerika", "LATAM" to "Latinamerika", "NAME" to "Nordamerika", "CARIBBEAN" to "Karibien"
+        "LAME" to "Latinamerika", "LATAM" to "Latinamerika", "NAME" to "Nordamerika", "CARIBBEAN" to "Karibien",
+        "KURDISH" to "Kurdiska", "KURDI" to "Kurdiska", "KURDISTAN" to "Kurdiska"
     )
 
     /** "EURO | EX-YU" blir "Ex-Yu", "ASIA | KURDISTAN" blir "Kurdistan". */
@@ -210,7 +253,7 @@ object Xmltv {
 }
 
 private val flagMap: Map<String, String> by lazy {
-    Locale.getISOCountries().associateBy { Locale("", it).getDisplayCountry(SV) }
+    (Locale.getISOCountries().toList() + "XK").associateBy { Locale("", it).getDisplayCountry(SV) }
 }
 
 fun flag(name: String): String {
@@ -218,6 +261,10 @@ fun flag(name: String): String {
     if (c.length != 2) return "🌍"
     return String(Character.toChars(0x1F1E6 + (c[0] - 'A'))) + String(Character.toChars(0x1F1E6 + (c[1] - 'A')))
 }
+
+/** Sorteringsnyckel där siffror jämförs som tal, så att "Kanal 2" kommer före "Kanal 10". */
+private val digits = Regex("""\d+""")
+fun sortKey(name: String): String = digits.replace(name.lowercase()) { it.value.trimStart('0').padStart(8, '0') }
 
 /** Sant för riktiga länder (de som har en flagga), falskt för grupper som "EURO". */
 fun isCountry(name: String): Boolean = flagMap.containsKey(name)

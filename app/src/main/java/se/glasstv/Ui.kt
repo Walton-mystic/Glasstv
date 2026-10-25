@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.ui.draw.shadow
@@ -73,6 +75,7 @@ object Th {
     var accent by mutableIntStateOf(0)
     var anim by mutableStateOf(true)
     var preview by mutableStateOf(true)
+    var sortAz by mutableStateOf(true)
     var sysLight by mutableStateOf(false)
     val light: Boolean get() = theme == 1 || (theme == 2 && sysLight)
 }
@@ -99,6 +102,7 @@ fun App(vm: MainVm) {
                 if (vm.showPrefs) Prefs(vm)
                 if (vm.showSettings) Settings(vm)
                 if (vm.updateAvailable && !vm.showSettings) UpdateDialog(vm)
+                vm.pendingPlaylist?.let { ConfirmPlaylist(vm, it) }
                 vm.lastCrash?.let { CrashNote(it) { vm.lastCrash = null } }
             }
         }
@@ -216,12 +220,19 @@ fun Home(vm: MainVm) {
         Rail(vm, Modifier.width(270.dp).fillMaxHeight())
         // Apple TV-upplägg: stor panel med livebild överst, kanalikoner i rutnät under.
         Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(22.dp)) {
-            Glass(Modifier.fillMaxWidth().height(250.dp)) { Info(vm, focused, now) }
+            Glass(Modifier.fillMaxWidth().height(190.dp)) { Info(vm, focused, now) }
             Glass(Modifier.fillMaxWidth().weight(1f)) { ChannelList(vm, shown, now) }
         }
     }
     Text(vm.versionLabel, color = White.copy(0.45f), fontSize = 12.sp,
         modifier = Modifier.align(Alignment.BottomEnd).padding(end = 34.dp, bottom = 7.dp))
+    val toast = vm.toast
+    LaunchedEffect(toast) {
+        if (toast != null && !toast.endsWith("…")) { delay(7000); if (vm.toast == toast) vm.toast = null }
+    }
+    if (toast != null && !armed) Glass(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp), radius = 999.dp, alpha = 0.2f, solid = true) {
+        Text(toast, color = White, fontSize = 17.sp, modifier = Modifier.padding(horizontal = 26.dp, vertical = 13.dp))
+    }
     if (armed) Glass(Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp), radius = 999.dp, alpha = 0.2f) {
         Text("Tryck Tillbaka igen för att avsluta", color = White, fontSize = 17.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp))
     }
@@ -248,9 +259,10 @@ fun Rail(vm: MainVm, modifier: Modifier) {
             if (vm.onlyFav && vm.favorites.isEmpty())
                 Text("Inga favoriter än – tryck ★ vid ett land", color = White.copy(0.55f), fontSize = 13.sp, modifier = Modifier.padding(start = 12.dp, bottom = 8.dp))
             Focusable(onClick = { vm.select(null) }, modifier = Modifier.fillMaxWidth().focusRequester(allReq), selected = vm.selected == null) {
-                Row(Modifier.padding(horizontal = 16.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("📺", fontSize = 20.sp); Spacer(Modifier.width(12.dp))
-                    Text("Alla kanaler", color = White, fontSize = 17.sp)
+                    Text("Alla kanaler", color = White, fontSize = 17.sp, modifier = Modifier.weight(1f))
+                    Text("${vm.countries.sumOf { vm.countryCounts[it] ?: 0 }}", color = White.copy(0.5f), fontSize = 14.sp)
                 }
             }
             Text("LÄNDER", color = White.copy(0.45f), fontSize = 12.sp, letterSpacing = 1.6.sp, modifier = Modifier.padding(start = 14.dp, top = 12.dp, bottom = 6.dp))
@@ -266,16 +278,17 @@ fun Rail(vm: MainVm, modifier: Modifier) {
                             Text("★", fontSize = 18.sp, color = if (c in vm.favorites) Color(0xFFFFD60A) else White.copy(0.35f), modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp))
                         }
                         Focusable(onClick = { vm.select(c) }, modifier = Modifier.weight(1f), selected = vm.selected == c) {
-                            Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(flag(c), fontSize = 20.sp); Spacer(Modifier.width(12.dp))
-                                Text(c, color = White, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(c, color = White, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                Text("${vm.countryCounts[c] ?: 0}", color = White.copy(0.5f), fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp))
                             }
                         }
                     }
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 8.dp)) {
-                Focusable(onClick = { vm.refresh() }, modifier = Modifier.weight(1f)) {
+                Focusable(onClick = { vm.refresh(notify = true) }, modifier = Modifier.weight(1f)) {
                     Text("↻ Uppdatera", color = White, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
                 }
                 Focusable(onClick = { vm.showPrefs = true }, modifier = Modifier.weight(1f)) {
@@ -321,11 +334,11 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
     // Apple TV-känsla: raden man står på ligger kvar på samma höjd och rutnätet glider mjukt under den.
     CompositionLocalProvider(LocalBringIntoViewSpec provides SmoothFocusScroll) {
     LazyVerticalGrid(
-        columns = GridCells.Fixed(5),
+        columns = GridCells.Fixed(7),
         state = vm.gridState,
-        contentPadding = PaddingValues(horizontal = 22.dp, vertical = 26.dp),
-        horizontalArrangement = Arrangement.spacedBy(18.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier
             .fillMaxSize()
             // Håller man ned en pil kommer ca 20 tryck i sekunden. Begränsa till ca 12, så hinner rutnätet med utan att hacka eller tappa fokus.
@@ -350,6 +363,8 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
             }
             .focusGroup()
     ) {
+        val top = vm.topChannels
+        if (top.isNotEmpty()) item(key = "top", span = { GridItemSpan(maxLineSpan) }, contentType = "top") { TopRow(vm, top, now) }
         gridItems(list, key = { it.uid }, contentType = { 0 }) { c -> ChannelTile(vm, c, now, reqs) }
     }
     }
@@ -366,14 +381,14 @@ private fun hueOf(s: String): Float = ((s.fold(7) { a, ch -> a * 31 + ch.code } 
 
 /** En kanal som glasikon i Apple TV-stil. Fast storlek, så rutnätet aldrig hoppar. */
 @Composable
-fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRequester>) {
+fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRequester>, modifier: Modifier = Modifier, small: Boolean = false) {
     val prog = vm.epg[c.id]?.firstOrNull { now >= it.start && now < it.stop }
     val fr = remember { FocusRequester() }
     DisposableEffect(c.uid) {
         reqs[c.uid] = fr
         onDispose { if (reqs[c.uid] === fr) reqs.remove(c.uid) }
     }
-    if (vm.focusUid == c.uid) {
+    if (!small && vm.focusUid == c.uid) {
         LaunchedEffect(Unit) { delay(60); runCatching { fr.requestFocus() }; if (vm.focusUid == c.uid) vm.focusUid = null }
     }
     var f by remember { mutableStateOf(false) }
@@ -382,11 +397,11 @@ fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRe
     val tileBg = remember(hue) { Brush.linearGradient(listOf(Color.hsv(hue, 0.62f, 0.62f), Color.hsv((hue + 40f) % 360f, 0.6f, 0.36f))) }
     val shape = RoundedCornerShape(22.dp)
     var logoOk by remember(c.logo) { mutableStateOf(false) }
-    Column(Modifier.zIndex(if (f) 1f else 0f), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier.zIndex(if (f) 1f else 0f), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .aspectRatio(16f / 10f)
+                .aspectRatio(16f / 9f)
                 .graphicsLayer { scaleX = sc; scaleY = sc; translationY = (sc - 1f) * -30f }
                 .drawBehind {
                     // Mjukt sken bakom markerad ruta: flera tunna lager som tonar ut (lätt för TV:n).
@@ -409,19 +424,33 @@ fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRe
             contentAlignment = Alignment.Center
         ) {
             if (c.logo != null) AsyncImage(
-                c.logo, null, Modifier.fillMaxSize().padding(16.dp), contentScale = ContentScale.Fit,
+                c.logo, null, Modifier.fillMaxSize().padding(10.dp), contentScale = ContentScale.Fit,
                 onSuccess = { logoOk = true }, onError = { logoOk = false }
             )
             if (!logoOk) {
                 val n = c.name
-                val size = when { n.length <= 5 -> 28.sp; n.length <= 9 -> 21.sp; n.length <= 13 -> 16.sp; else -> 14.sp }
+                val size = when { n.length <= 5 -> 28.sp; n.length <= 9 -> 21.sp; n.length <= 13 -> 16.sp; else -> 14.sp }.let { if (small) it * 0.7f else it }
                 Text(n, color = Color.White, fontSize = size, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center,
                     maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = size * 1.1f, modifier = Modifier.padding(horizontal = 10.dp))
             }
         }
-        Spacer(Modifier.height(9.dp))
-        Text(prog?.title ?: if (f) c.name else "", color = White.copy(if (f) 0.95f else 0.6f), fontSize = 13.sp,
-            fontWeight = if (f) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(8.dp))
+        // Kanalnamnet står alltid kvar under rutan; programmet som går nu under det (om tv-guide finns).
+        Text(c.name, color = White.copy(if (f) 1f else 0.85f), fontSize = if (small) 12.sp else 14.sp,
+            fontWeight = if (f) FontWeight.Bold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+        if (!small) Text(prog?.title ?: "", color = White.copy(0.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** Raden "Mest sedda" överst i rutnätet, med mindre ikoner. */
+@Composable
+fun TopRow(vm: MainVm, top: List<Channel>, now: Long) {
+    val reqs = remember { HashMap<Int, FocusRequester>() }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("MEST SEDDA", color = White.copy(0.5f), fontSize = 12.sp, letterSpacing = 1.6.sp, modifier = Modifier.padding(start = 4.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp)) {
+            items(top, key = { "t" + it.uid }) { c -> ChannelTile(vm, c, now, reqs, Modifier.width(132.dp), small = true) }
+        }
     }
 }
 
@@ -429,8 +458,8 @@ fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRe
 @Composable
 fun Info(vm: MainVm, c: Channel?, now: Long) {
     Box(Modifier.fillMaxSize()) {
-    Clock(Modifier.align(Alignment.TopEnd).padding(top = 14.dp, end = 24.dp))
-    Row(Modifier.fillMaxSize().padding(18.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+    Clock(Modifier.align(Alignment.TopEnd).padding(top = 10.dp, end = 22.dp))
+    Row(Modifier.fillMaxSize().padding(14.dp), horizontalArrangement = Arrangement.spacedBy(22.dp)) {
         Box(Modifier.fillMaxHeight().aspectRatio(16f / 9f, matchHeightConstraintsFirst = true).clip(RoundedCornerShape(18.dp)).background(Color.Black.copy(0.5f))) {
             if (!Th.preview) Text("Livebild avstängd", color = Color.White.copy(0.5f), fontSize = 14.sp, modifier = Modifier.align(Alignment.Center))
             if (Th.preview && vm.playing != null) AndroidView(
@@ -447,7 +476,7 @@ fun Info(vm: MainVm, c: Channel?, now: Long) {
                     }
                     Spacer(Modifier.width(12.dp))
                 }
-                Text(c.name, color = White, fontSize = 28.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(c.name, color = White, fontSize = 24.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             val list = vm.epg[c.id].orEmpty()
             val cur = list.firstOrNull { now >= it.start && now < it.stop }
@@ -476,7 +505,7 @@ fun Clock(modifier: Modifier = Modifier) {
     val t by produceState(System.currentTimeMillis()) {
         while (true) { value = System.currentTimeMillis(); delay(60_000 - value % 60_000 + 50) }
     }
-    Text(hm(t), color = White, fontSize = 30.sp, fontWeight = FontWeight.SemiBold, modifier = modifier)
+    Text(hm(t), color = White, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, modifier = modifier)
 }
 
 @Composable
@@ -537,10 +566,12 @@ fun Qr(text: String, box: Dp) {
 
 @Composable
 fun Settings(vm: MainVm) {
-    var m by remember { mutableStateOf(vm.repo.m3uUrl) }
-    var e by remember { mutableStateOf(vm.repo.epgUrl) }
-    val saved = remember { Xtream.parse(vm.repo.m3uUrl) }
-    var xt by remember { mutableStateOf(saved != null || vm.repo.m3uUrl.isBlank()) }
+    val editIndex = vm.editProfile ?: -1
+    val cur = remember { vm.profiles.getOrNull(editIndex) }
+    var m by remember { mutableStateOf(cur?.m3u ?: "") }
+    var e by remember { mutableStateOf(cur?.epg ?: "") }
+    val saved = remember { Xtream.parse(cur?.m3u ?: "") }
+    var xt by remember { mutableStateOf(saved != null || cur == null) }
     var xh by remember { mutableStateOf(saved?.first ?: "") }
     var xu by remember { mutableStateOf(saved?.second ?: "") }
     var xp by remember { mutableStateOf(saved?.third ?: "") }
@@ -548,18 +579,21 @@ fun Settings(vm: MainVm) {
     var qrMsg by remember { mutableStateOf("Anslut TV:n till wifi för att få en QR-kod.") }
     val primary = remember { FocusRequester() }
     DisposableEffect(Unit) {
-        val srv = PairServer { a, b -> Handler(Looper.getMainLooper()).post { vm.saveUrls(a, b); vm.showSettings = false } }
+        // Det som skickas från mobilen sparas inte direkt, utan visas först för bekräftelse på TV:n.
+        val srv = PairServer { a, b -> Handler(Looper.getMainLooper()).post { vm.pendingPlaylist = a to b; vm.showSettings = false } }
         if (srv.start()) link = localIp()?.let { "http://$it:${srv.port}" }
         else qrMsg = "QR-koden går inte att visa just nu. Skriv in länken här."
-        onDispose { srv.stop() }
+        onDispose { srv.stop(); vm.editProfile = null }
     }
     LaunchedEffect(Unit) { delay(150); runCatching { primary.requestFocus() } }
     Dialog(onDismissRequest = { vm.showSettings = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Glass(Modifier.fillMaxWidth(0.82f), alpha = 0.18f, solid = true) {
-            Row(Modifier.padding(36.dp), horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Box(Modifier.size(60.dp).clip(RoundedCornerShape(18.dp)).background(Brush.linearGradient(listOf(Blue, Violet))), contentAlignment = Alignment.Center) { Text("📺", fontSize = 28.sp) }
-                    Text("Välkommen till GlassTV", color = White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.padding(28.dp), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                // Rullbar, så att knapparna aldrig trycks ihop när rutan blir hög (t.ex. med felmeddelande).
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(Modifier.size(44.dp).clip(RoundedCornerShape(18.dp)).background(Brush.linearGradient(listOf(Blue, Violet))), contentAlignment = Alignment.Center) { Text("📺", fontSize = 28.sp) }
+                    Text(when { vm.profiles.isEmpty() -> "Välkommen till GlassTV"; cur != null -> "Ändra spellista"; else -> "Ny spellista" },
+                        color = White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
                     Text("Lägg till din spellista för att komma igång.", color = White.copy(0.6f), fontSize = 16.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Focusable(onClick = { xt = true }, selected = xt) {
@@ -586,9 +620,9 @@ fun Settings(vm: MainVm) {
                         Btn("Spara och ladda", true, if (!hasList) Modifier.focusRequester(primary) else Modifier) {
                             if (xt) {
                                 if (xh.isBlank() || xu.isBlank() || xp.isBlank()) vm.status = "Fyll i server, användarnamn och lösenord"
-                                else { vm.saveUrls(Xtream.m3u(xh, xu, xp), Xtream.epg(xh, xu, xp)); vm.showSettings = false }
+                                else { vm.saveProfile(editIndex, Xtream.m3u(xh, xu, xp), Xtream.epg(xh, xu, xp)); vm.showSettings = false }
                             } else if (m.isBlank()) vm.status = "Skriv in en M3U-länk först"
-                            else { vm.saveUrls(m.trim(), e.trim()); vm.showSettings = false }
+                            else { vm.saveProfile(editIndex, m.trim(), e.trim()); vm.showSettings = false }
                         }
                         Btn("Läs in fil", false) { vm.pickFile() }
                         Btn("Stäng", false, if (hasList) Modifier.focusRequester(primary) else Modifier) { vm.showSettings = false }
@@ -628,10 +662,10 @@ fun PrefRow(label: String, opts: List<String>, sel: Int, set: (Int) -> Unit, req
 
 @Composable
 fun Prefs(vm: MainVm) {
-    val orig = remember { listOf(Th.theme, Th.accent, if (Th.anim) 0 else 1, if (Th.preview) 0 else 1) }
+    val orig = remember { listOf(Th.theme, Th.accent, if (Th.anim) 0 else 1, if (Th.preview) 0 else 1, if (Th.sortAz) 0 else 1) }
     val first = remember { FocusRequester() }
-    fun cancel() { Th.theme = orig[0]; Th.accent = orig[1]; Th.anim = orig[2] == 0; Th.preview = orig[3] == 0; vm.onPreviewSetting(Th.preview); vm.showPrefs = false }
-    fun save() { vm.repo.theme = Th.theme; vm.repo.accent = Th.accent; vm.repo.anim = Th.anim; vm.repo.preview = Th.preview; vm.showPrefs = false }
+    fun cancel() { Th.theme = orig[0]; Th.accent = orig[1]; Th.anim = orig[2] == 0; Th.preview = orig[3] == 0; Th.sortAz = orig[4] == 0; vm.onPreviewSetting(Th.preview); vm.showPrefs = false }
+    fun save() { vm.repo.theme = Th.theme; vm.repo.accent = Th.accent; vm.repo.anim = Th.anim; vm.repo.preview = Th.preview; vm.repo.sortAz = Th.sortAz; vm.showPrefs = false }
     LaunchedEffect(Unit) { delay(150); runCatching { first.requestFocus() } }
     Dialog(onDismissRequest = { cancel() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Glass(
@@ -645,17 +679,18 @@ fun Prefs(vm: MainVm) {
             },
             alpha = 0.18f, solid = true
         ) {
-            Column(Modifier.padding(32.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.padding(32.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("⚙ Inställningar", color = White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 Text("UTSEENDE OCH PRESTANDA", color = White.copy(0.45f), fontSize = 12.sp, letterSpacing = 1.6.sp, modifier = Modifier.padding(top = 6.dp))
                 PrefRow("Tema", listOf("Mörkt", "Ljust", "Auto"), Th.theme, { Th.theme = it }, first)
                 PrefRow("Accentfärg", listOf("Blå", "Lila", "Grön", "Korall"), Th.accent, { Th.accent = it })
                 PrefRow("Rörlig bakgrund", listOf("På", "Av"), if (Th.anim) 0 else 1, { Th.anim = it == 0 })
                 PrefRow("Livebild i förhandsvisning", listOf("På", "Av"), if (Th.preview) 0 else 1, { Th.preview = it == 0; vm.onPreviewSetting(Th.preview) })
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Spellista", color = White, fontSize = 18.sp, modifier = Modifier.weight(1f))
-                    Btn("Ändra länk…", false) { vm.showSettings = true }
-                }
+                PrefRow("Kanalordning", listOf("A–Ö", "Som leverantören"), if (Th.sortAz) 0 else 1, { Th.sortAz = it == 0 })
+                Text("SPELLISTOR (${vm.profiles.size}/$MAX_PROFILES)", color = White.copy(0.45f), fontSize = 12.sp, letterSpacing = 1.6.sp, modifier = Modifier.padding(top = 10.dp))
+                vm.profiles.forEachIndexed { i, p -> ProfileRow(vm, i, p) }
+                if (vm.profiles.size < MAX_PROFILES)
+                    Btn("+ Lägg till spellista", false) { vm.editProfile = -1; vm.showSettings = true }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Uppdatering", color = White, fontSize = 18.sp)
@@ -668,6 +703,57 @@ fun Prefs(vm: MainVm) {
                     Btn("Avbryt", false) { cancel() }
                 }
                 Text("Grön knapp = spara · Röd knapp = avbryt · Tillbaka = avbryt", color = White.copy(0.5f), fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+/** En rad i listan med sparade spellistor. */
+@Composable
+fun ProfileRow(vm: MainVm, i: Int, p: Profile) {
+    val active = i == vm.activeProfile
+    var confirm by remember(p) { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(if (active) "●" else "○", color = if (active) Blue else White.copy(0.4f), fontSize = 18.sp, modifier = Modifier.padding(end = 12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(p.name, color = White, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (active) Text("Används nu", color = White.copy(0.55f), fontSize = 12.sp)
+        }
+        if (!active) { Btn("Använd", true) { vm.useProfile(i); vm.showPrefs = false }; Spacer(Modifier.width(8.dp)) }
+        Btn("Ändra", false) { vm.editProfile = i; vm.showSettings = true }
+        Spacer(Modifier.width(8.dp))
+        Btn(if (confirm) "Säker?" else "Ta bort", false) { if (confirm) vm.deleteProfile(i) else confirm = true }
+    }
+}
+
+/** Bekräftelse när en ny spellista skickats från mobilen. */
+@Composable
+fun ConfirmPlaylist(vm: MainVm, p: Pair<String, String>) {
+    val fr = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(150); runCatching { fr.requestFocus() } }
+    val server = remember(p) {
+        Xtream.parse(p.first)?.let { "Xtream: " + it.first.substringAfter("://") + "  ·  användare " + it.second }
+            ?: runCatching { java.net.URL(p.first).host }.getOrDefault(p.first.take(60))
+    }
+    Dialog(onDismissRequest = { vm.pendingPlaylist = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Glass(Modifier.fillMaxWidth(0.55f), alpha = 0.2f, solid = true) {
+            Column(Modifier.padding(30.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Box(Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(Brush.linearGradient(listOf(Blue, Violet))), contentAlignment = Alignment.Center) {
+                    Text("📱", fontSize = 24.sp)
+                }
+                Text("Ny spellista från mobilen", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                Text(server, color = White.copy(0.8f), fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("Vill du ersätta spellistan du använder nu, eller spara den som en ny? Favoriter och inställningar finns kvar.",
+                    color = White.copy(0.65f), fontSize = 15.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Btn(if (vm.profiles.isEmpty()) "Använd" else "Ersätt nuvarande", true, Modifier.focusRequester(fr)) {
+                        val (a, b) = p; vm.pendingPlaylist = null
+                        vm.saveProfile(if (vm.profiles.isEmpty()) -1 else vm.activeProfile, a, b)
+                    }
+                    if (vm.profiles.isNotEmpty() && vm.profiles.size < MAX_PROFILES)
+                        Btn("Spara som ny", false) { val (a, b) = p; vm.pendingPlaylist = null; vm.saveProfile(-1, a, b) }
+                    Btn("Avbryt", false) { vm.pendingPlaylist = null }
+                }
             }
         }
     }
