@@ -266,6 +266,10 @@ fun flag(name: String): String {
 private val digits = Regex("""\d+""")
 fun sortKey(name: String): String = digits.replace(name.lowercase()) { it.value.trimStart('0').padStart(8, '0') }
 
+/** Tomma platshållarkanaler som leverantörer lägger in, t.ex. "NO EVENT STREAMING NOW" för PPV-event som inte sänds. */
+private val placeholder = Regex("""(?i)\bno\s+(event|events|stream|streaming|live|signal|channel)\b|\bnot\s+(live|streaming)\s+now\b|\boff\s*air\b|\bcoming\s+soon\b""")
+fun isPlaceholder(name: String): Boolean = placeholder.containsMatchIn(name)
+
 /** Sant för riktiga länder (de som har en flagga), falskt för grupper som "EURO". */
 fun isCountry(name: String): Boolean = flagMap.containsKey(name)
 

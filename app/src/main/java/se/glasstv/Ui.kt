@@ -79,6 +79,7 @@ object Th {
     var anim by mutableStateOf(true)
     var preview by mutableStateOf(true)
     var sortAz by mutableStateOf(true)
+    var hideEmpty by mutableStateOf(true)
     var sysLight by mutableStateOf(false)
     val light: Boolean get() = theme == 1 || (theme == 2 && sysLight)
 }
@@ -727,10 +728,10 @@ fun PrefRow(label: String, opts: List<String>, sel: Int, set: (Int) -> Unit, req
 
 @Composable
 fun Prefs(vm: MainVm) {
-    val orig = remember { listOf(Th.theme, Th.accent, if (Th.anim) 0 else 1, if (Th.preview) 0 else 1, if (Th.sortAz) 0 else 1) }
+    val orig = remember { listOf(Th.theme, Th.accent, if (Th.anim) 0 else 1, if (Th.preview) 0 else 1, if (Th.sortAz) 0 else 1, if (Th.hideEmpty) 0 else 1) }
     val first = remember { FocusRequester() }
-    fun cancel() { Th.theme = orig[0]; Th.accent = orig[1]; Th.anim = orig[2] == 0; Th.preview = orig[3] == 0; Th.sortAz = orig[4] == 0; vm.onPreviewSetting(Th.preview); vm.showPrefs = false }
-    fun save() { vm.repo.theme = Th.theme; vm.repo.accent = Th.accent; vm.repo.anim = Th.anim; vm.repo.preview = Th.preview; vm.repo.sortAz = Th.sortAz; vm.showPrefs = false }
+    fun cancel() { Th.theme = orig[0]; Th.accent = orig[1]; Th.anim = orig[2] == 0; Th.preview = orig[3] == 0; Th.sortAz = orig[4] == 0; Th.hideEmpty = orig[5] == 0; vm.onPreviewSetting(Th.preview); vm.showPrefs = false }
+    fun save() { vm.repo.theme = Th.theme; vm.repo.accent = Th.accent; vm.repo.anim = Th.anim; vm.repo.preview = Th.preview; vm.repo.sortAz = Th.sortAz; vm.repo.hideEmpty = Th.hideEmpty; vm.showPrefs = false }
     LaunchedEffect(Unit) { delay(150); runCatching { first.requestFocus() } }
     Dialog(onDismissRequest = { cancel() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Glass(
@@ -752,6 +753,7 @@ fun Prefs(vm: MainVm) {
                 PrefRow("Rörlig bakgrund", listOf("På", "Av"), if (Th.anim) 0 else 1, { Th.anim = it == 0 })
                 PrefRow("Livebild i förhandsvisning", listOf("På", "Av"), if (Th.preview) 0 else 1, { Th.preview = it == 0; vm.onPreviewSetting(Th.preview) })
                 PrefRow("Kanalordning", listOf("A–Ö", "Som leverantören"), if (Th.sortAz) 0 else 1, { Th.sortAz = it == 0 })
+                PrefRow("Tomma eventkanaler (NO EVENT)", listOf("Dölj", "Visa"), if (Th.hideEmpty) 0 else 1, { Th.hideEmpty = it == 0 })
                 Text("SPELLISTOR (${vm.profiles.size}/$MAX_PROFILES)", color = White.copy(0.45f), fontSize = 12.sp, letterSpacing = 1.6.sp, modifier = Modifier.padding(top = 10.dp))
                 vm.profiles.forEachIndexed { i, p -> ProfileRow(vm, i, p) }
                 if (vm.profiles.size < MAX_PROFILES)

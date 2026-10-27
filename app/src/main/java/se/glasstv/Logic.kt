@@ -98,6 +98,9 @@ class Repo(ctx: Context) {
             val o = org.json.JSONObject(); v.forEach { (k, s) -> o.put(k, s) }
             prefs.edit().putString("watch", o.toString()).apply()
         }
+    var hideEmpty: Boolean
+        get() = prefs.getBoolean("hideEmpty", true)
+        set(v) { prefs.edit().putBoolean("hideEmpty", v).apply() }
     var sortAz: Boolean
         get() = prefs.getBoolean("sortAz", true)
         set(v) { prefs.edit().putBoolean("sortAz", v).apply() }
@@ -438,20 +441,23 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     }
     val gridState = LazyGridState()
 
+    /** Kanallistan utan tomma platshållare ("NO EVENT STREAMING NOW"), om det är påslaget i inställningarna. */
+    val visible by derivedStateOf { if (Th.hideEmpty) channels.filterNot { isPlaceholder(it.name) } else channels }
+
     val countries by derivedStateOf {
         val f = favorites
-        val all = channels.asSequence().map { it.country }.distinct().toList()
+        val all = visible.asSequence().map { it.country }.distinct().toList()
         (if (onlyFav && f.isNotEmpty()) all.filter { it in f } else all)
             .sortedWith(compareBy<String>({ it !in f }, { !isCountry(it) }, { it }))
     }
     /** Antal kanaler per land/grupp, som visas i menyn. */
-    val countryCounts by derivedStateOf { channels.groupingBy { it.country }.eachCount() }
+    val countryCounts by derivedStateOf { visible.groupingBy { it.country }.eachCount() }
 
     val shown by derivedStateOf {
         val s = selected
         val cs = countries
-        val base = if (s != null && s in cs) channels.filter { it.country == s }
-            else { val set = cs.toHashSet(); channels.filter { it.country in set } }
+        val base = if (s != null && s in cs) visible.filter { it.country == s }
+            else { val set = cs.toHashSet(); visible.filter { it.country in set } }
         if (!Th.sortAz) base
         else {
             // A–Ö inom varje land; länderna ligger kvar i samma ordning som i menyn.
@@ -742,7 +748,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
 
     // Körs sist, när alla fält ovan redan finns (viewModelScope startar direkt på huvudtråden).
     init {
-        Th.theme = repo.theme; Th.accent = repo.accent; Th.anim = repo.anim; Th.preview = repo.preview; Th.sortAz = repo.sortAz
+        Th.theme = repo.theme; Th.accent = repo.accent; Th.anim = repo.anim; Th.preview = repo.preview; Th.sortAz = repo.sortAz; Th.hideEmpty = repo.hideEmpty
         // Den spellista man redan hade blir spellista nummer 1.
         if (profiles.isEmpty() && repo.m3uUrl.isNotBlank()) {
             val p = listOf(Profile(profileName(repo.m3uUrl), repo.m3uUrl, repo.epgUrl))
