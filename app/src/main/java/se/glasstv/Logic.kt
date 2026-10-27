@@ -23,10 +23,16 @@ import java.net.URL
 import java.util.zip.GZIPInputStream
 
 const val UA = "Mozilla/5.0 (Linux; Android 12) GlassTV/1.0"
+/** Många IPTV-leverantörer släpper bara igenom kända spelare. Provas om den vanliga nekas. */
+const val UA_ALT = "VLC/3.0.20 LibVLC/3.0.20"
+
+/** Fel från servern med statuskod, så att vi kan avgöra om ett nytt försök är lönt. */
+class HttpError(val code: Int, msg: String) : IOException(msg)
 const val MAX_PROFILES = 5
 
 /** En sparad spellista (server). Upp till [MAX_PROFILES] kan sparas, en i taget används. */
-data class Profile(val name: String, val m3u: String, val epg: String)
+/** [alts] = reservadresser till servern (en per rad), som provas om huvudadressen inte svarar. */
+data class Profile(val name: String, val m3u: String, val epg: String, val alts: String = "")
 /** Höjs när sättet att tolka spellistan ändras, så att den sparade kanallistan byggs om. */
 const val CACHE_VERSION = 5
 
@@ -41,6 +47,10 @@ class Repo(ctx: Context) {
     var epgUrl: String
         get() = prefs.getString("epg", "") ?: ""
         set(v) { prefs.edit().putString("epg", v).apply() }
+    /** Reservadresser för den spellista som används nu. */
+    var altHosts: List<String>
+        get() = (prefs.getString("alts", "") ?: "").split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+        set(v) { prefs.edit().putString("alts", v.joinToString("\n")).apply() }
     var favorites: Set<String>
         get() = prefs.getStringSet("fav", emptySet())?.toSet() ?: emptySet()
         set(v) { prefs.edit().putStringSet("fav", v).apply() }
@@ -55,11 +65,11 @@ class Repo(ctx: Context) {
     var profiles: List<Profile>
         get() = try {
             val a = org.json.JSONArray(prefs.getString("profiles", "[]"))
-            (0 until a.length()).map { val o = a.getJSONObject(it); Profile(o.optString("name"), o.optString("m3u"), o.optString("epg")) }
+            (0 until a.length()).map { val o = a.getJSONObject(it); Profile(o.optString("name"), o.optString("m3u"), o.optString("epg"), o.optString("alts")) }
         } catch (e: Exception) { emptyList() }
         set(v) {
             val a = org.json.JSONArray()
-            v.forEach { a.put(org.json.JSONObject().put("name", it.name).put("m3u", it.m3u).put("epg", it.epg)) }
+            v.forEach { a.put(org.json.JSONObject().put("name", it.name).put("m3u", it.m3u).put("epg", it.epg).put("alts", it.alts)) }
             prefs.edit().putString("profiles", a.toString()).apply()
         }
     var activeProfile: Int
@@ -158,12 +168,110 @@ class Repo(ctx: Context) {
 
     private fun stripBom(h: String) = h.removePrefix("\u00EF\u00BB\u00BF").removePrefix("\uFEFF")
 
+    /**
+     * Hämtar spellistan. Nekar leverantören M3U-filen (t.ex. fel 884) och länken är en Xtream-inloggning,
+     * byggs listan i stället från Xtream-API:t (player_api.php), samma väg som IPTV Smarters använder.
+     */
     fun downloadPlaylist(): List<Channel> {
-        download(m3uUrl, playlistFile) { head -> stripBom(head).trimStart().startsWith("#EXTM3U", true) }
+        try {
+            withFallback(m3uUrl, playlistFile) { head -> stripBom(head).trimStart().startsWith("#EXTM3U", true) }
+        } catch (e: Exception) {
+            val x = Xtream.parse(m3uUrl) ?: throw e
+            if (e is HttpError && e.code == 401) throw e
+            var ok = false
+            for (h in (listOf(x.first) + altHosts).distinct()) {
+                try { playlistFromApi(h, x.second, x.third); ok = true; break } catch (e2: Exception) { }
+            }
+            if (!ok) throw e
+        }
         return cachedChannels()
     }
 
-    fun downloadEpg() = download(epgUrl, epgFile) { head ->
+    /** Bygger en M3U-fil av Xtream-API:ts kategorier och livekanaler, så att resten av appen fungerar som vanligt. */
+    private fun playlistFromApi(host: String, user: String, pass: String) {
+        val enc = { v: String -> java.net.URLEncoder.encode(v, "UTF-8") }
+        val base = host.trimEnd('/') + "/player_api.php?username=" + enc(user) + "&password=" + enc(pass)
+        val isJsonArray = { head: String -> stripBom(head).trimStart().startsWith("[") }
+        val catFile = File(cacheDir, "api_cats.json"); val liveFile = File(cacheDir, "api_live.json")
+        try {
+            download("$base&action=get_live_categories", catFile, isJsonArray)
+            download("$base&action=get_live_streams", liveFile, isJsonArray)
+            val cats = HashMap<String, String>()
+            android.util.JsonReader(catFile.bufferedReader()).use { r ->
+                r.beginArray()
+                while (r.hasNext()) {
+                    var id = ""; var name = ""
+                    r.beginObject()
+                    while (r.hasNext()) when (r.nextName()) {
+                        "category_id" -> id = jsonString(r)
+                        "category_name" -> name = jsonString(r)
+                        else -> r.skipValue()
+                    }
+                    r.endObject()
+                    cats[id] = name
+                }
+                r.endArray()
+            }
+            val clean = { v: String -> v.replace('"', '\'').replace('\n', ' ').replace('\r', ' ') }
+            val tmp = File.createTempFile("api", ".m3u", playlistFile.parentFile)
+            var n = 0
+            tmp.bufferedWriter().use { w ->
+                w.write("#EXTM3U\n")
+                android.util.JsonReader(liveFile.bufferedReader()).use { r ->
+                    r.beginArray()
+                    while (r.hasNext()) {
+                        var name = ""; var id = ""; var icon = ""; var epg = ""; var cat = ""; var ext = "ts"
+                        r.beginObject()
+                        while (r.hasNext()) when (r.nextName()) {
+                            "name" -> name = jsonString(r)
+                            "stream_id" -> id = jsonString(r)
+                            "stream_icon" -> icon = jsonString(r)
+                            "epg_channel_id" -> epg = jsonString(r)
+                            "category_id" -> cat = jsonString(r)
+                            "container_extension" -> ext = jsonString(r).ifBlank { "ts" }
+                            else -> r.skipValue()
+                        }
+                        r.endObject()
+                        if (id.isNotBlank()) {
+                        w.write("#EXTINF:-1 tvg-id=\"${clean(epg)}\" tvg-name=\"${clean(name)}\" tvg-logo=\"${clean(icon)}\" group-title=\"${clean(cats[cat].orEmpty())}\",${clean(name)}\n")
+                        w.write(host.trimEnd('/') + "/live/" + enc(user) + "/" + enc(pass) + "/" + id + "." + (if (ext == "m3u8") "m3u8" else "ts") + "\n")
+                        n++
+                        }
+                    }
+                    r.endArray()
+                }
+            }
+            if (n == 0) { tmp.delete(); throw IOException("spellistan var tom") }
+            if (!tmp.renameTo(playlistFile)) { tmp.copyTo(playlistFile, overwrite = true); tmp.delete() }
+        } finally { catFile.delete(); liveFile.delete() }
+    }
+
+    /** Xtream-API:t skickar ibland tal och ibland text för samma fält. */
+    private fun jsonString(r: android.util.JsonReader): String = when (r.peek()) {
+        android.util.JsonToken.NULL -> { r.nextNull(); "" }
+        android.util.JsonToken.BOOLEAN -> r.nextBoolean().toString()
+        android.util.JsonToken.BEGIN_ARRAY, android.util.JsonToken.BEGIN_OBJECT -> { r.skipValue(); "" }
+        else -> r.nextString()
+    }
+
+    /** Samma adress på reservservern: http://huvud:80/get.php?… blir http://reserv/get.php?… */
+    private fun withHost(url: String, host: String): String =
+        try { host.trimEnd('/') + URL(url).file } catch (e: Exception) { url }
+
+    /** Provar huvudadressen och sedan varje reservadress tills någon svarar med en giltig fil. */
+    private fun withFallback(url: String, dest: File, looksValid: (String) -> Boolean) {
+        try { download(url, dest, looksValid) }
+        catch (e: Exception) {
+            for (h in altHosts) {
+                val alt = withHost(url, h)
+                if (alt == url) continue
+                try { download(alt, dest, looksValid); return } catch (e2: Exception) { }
+            }
+            throw e
+        }
+    }
+
+    fun downloadEpg() = withFallback(epgUrl, epgFile) { head ->
         val b = head.toByteArray(Charsets.ISO_8859_1)
         (b.size >= 2 && b[0] == 0x1f.toByte() && b[1] == 0x8b.toByte()) || stripBom(head).trimStart().startsWith("<")
     }
@@ -185,21 +293,30 @@ class Repo(ctx: Context) {
      */
     private fun download(start: String, dest: File, looksValid: (String) -> Boolean) {
         try {
-            downloadOnce(start, dest, looksValid)
+            downloadAgent(start, dest, looksValid)
         } catch (e: javax.net.ssl.SSLException) {
             if (!start.startsWith("https://", ignoreCase = true)) throw e
-            downloadOnce("http://" + start.substring(8), dest, looksValid)
+            downloadAgent("http://" + start.substring(8), dest, looksValid)
         }
     }
 
-    private fun downloadOnce(start: String, dest: File, looksValid: (String) -> Boolean) {
+    /** Nekas appen (t.ex. fel 884 eller 403) provas samma adress en gång till som en vanlig spelare (VLC). */
+    private fun downloadAgent(start: String, dest: File, looksValid: (String) -> Boolean) {
+        try { downloadOnce(start, dest, looksValid, UA) }
+        catch (e: HttpError) {
+            if (e.code == 401 || e.code == 404) throw e
+            downloadOnce(start, dest, looksValid, UA_ALT)
+        }
+    }
+
+    private fun downloadOnce(start: String, dest: File, looksValid: (String) -> Boolean, agent: String) {
         var url = URL(start)
         var c: HttpURLConnection? = null
         for (hop in 0 until 6) {
             val conn = url.openConnection() as HttpURLConnection
             conn.connectTimeout = 10_000; conn.readTimeout = 30_000
             conn.instanceFollowRedirects = false
-            conn.setRequestProperty("User-Agent", UA)
+            conn.setRequestProperty("User-Agent", agent)
             val (code, loc) = try {
                 val rc = conn.responseCode
                 rc to (if (rc in 300..399) conn.getHeaderField("Location") ?: throw IOException("Omdirigering utan adress") else null)
@@ -211,10 +328,11 @@ class Repo(ctx: Context) {
             }
             if (code != 200) {
                 conn.disconnect()
-                throw IOException(when {
-                    code == 401 || code == 403 -> "inloggningen nekades (fel $code), kontrollera användarnamn och lösenord"
-                    code >= 500 -> "leverantörens server svarar inte just nu (fel $code), försök igen senare"
-                    else -> "servern svarade $code"
+                throw HttpError(code, when {
+                    code == 401 -> "inloggningen nekades (fel $code), kontrollera användarnamn och lösenord"
+                    code == 403 -> "leverantören nekade nedladdningen (fel $code), kontrollera inloggningen eller prova en reservadress"
+                    code in 500..599 -> "leverantörens server svarar inte just nu (fel $code), försök igen senare"
+                    else -> "leverantören nekade nedladdningen (fel $code), prova en reservadress eller försök igen senare"
                 })
             }
             c = conn
@@ -389,7 +507,8 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     /** Kort besked längst ner på skärmen. Slutar texten med "…" ligger den kvar tills nästa besked. */
     var toast by mutableStateOf<String?>(null)
     /** Spellista som skickats från mobilen och väntar på att bekräftas på TV:n. */
-    var pendingPlaylist by mutableStateOf<Pair<String, String>?>(null)
+    /** (m3u, tv-guide, reservadresser) */
+    var pendingPlaylist by mutableStateOf<Triple<String, String, String>?>(null)
 
     /**
      * Hämtar spellistan på nytt. Tv-guiden hämtas bara om den är gammal, eller om [force] (knappen ↻).
@@ -433,8 +552,8 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             ?: runCatching { java.net.URL(m3u).host }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Spellista"
 
     /** Sparar en spellista. Ny spellista, eller ändring av den som används, laddas direkt. */
-    fun saveProfile(index: Int, m3u: String, epg: String) {
-        val p = Profile(profileName(m3u), m3u, epg)
+    fun saveProfile(index: Int, m3u: String, epg: String, alts: String = "") {
+        val p = Profile(profileName(m3u), m3u, epg, alts)
         val list = profiles.toMutableList()
         val isNew = index !in list.indices
         val i = when {
@@ -450,7 +569,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     fun useProfile(i: Int) {
         val p = profiles.getOrNull(i) ?: return
         activeProfile = i; repo.activeProfile = i
-        saveUrls(p.m3u, p.epg)
+        saveUrls(p.m3u, p.epg, p.alts)
     }
 
     fun deleteProfile(i: Int) {
@@ -464,8 +583,8 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun saveUrls(m3u: String, epgUrl: String) {
-        repo.m3uUrl = m3u; repo.epgUrl = epgUrl
+    fun saveUrls(m3u: String, epgUrl: String, alts: String = "") {
+        repo.m3uUrl = m3u; repo.epgUrl = epgUrl; repo.altHosts = alts.lines()
         refreshJob?.cancel()
         refreshJob = null
         refresh(notify = true)

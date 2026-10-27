@@ -638,7 +638,7 @@ fun Settings(vm: MainVm) {
     val primary = remember { FocusRequester() }
     DisposableEffect(Unit) {
         // Det som skickas från mobilen sparas inte direkt, utan visas först för bekräftelse på TV:n.
-        val srv = PairServer { a, b -> Handler(Looper.getMainLooper()).post { vm.pendingPlaylist = a to b; vm.showSettings = false } }
+        val srv = PairServer { a, b, c -> Handler(Looper.getMainLooper()).post { vm.pendingPlaylist = Triple(a, b, c); vm.showSettings = false } }
         if (srv.start()) link = localIp()?.let { "http://$it:${srv.port}" }
         else qrMsg = "QR-koden går inte att visa just nu. Skriv in länken här."
         onDispose { srv.stop(); vm.editProfile = null }
@@ -676,11 +676,18 @@ fun Settings(vm: MainVm) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         val hasList = vm.channels.isNotEmpty()
                         Btn("Spara och ladda", true, if (!hasList) Modifier.focusRequester(primary) else Modifier) {
-                            if (xt) {
+                            // Har hela meddelandet från leverantören klistrats in i ett fält tolkas det direkt.
+                            val pasted = listOf(xh, m).firstOrNull { Xtream.looksLikeMessage(it) }
+                            val x = pasted?.let { Xtream.fromText(it) }
+                            val keepAlts = cur?.alts.orEmpty()
+                            if (pasted != null) {
+                                if (x == null) vm.status = "Hittade ingen serveradress i texten"
+                                else { vm.saveProfile(editIndex, x.m3u, x.epg, x.alts); vm.showSettings = false }
+                            } else if (xt) {
                                 if (xh.isBlank() || xu.isBlank() || xp.isBlank()) vm.status = "Fyll i server, användarnamn och lösenord"
-                                else { vm.saveProfile(editIndex, Xtream.m3u(xh, xu, xp), Xtream.epg(xh, xu, xp)); vm.showSettings = false }
+                                else { vm.saveProfile(editIndex, Xtream.m3u(xh, xu, xp), Xtream.epg(xh, xu, xp), keepAlts); vm.showSettings = false }
                             } else if (m.isBlank()) vm.status = "Skriv in en M3U-länk först"
-                            else { vm.saveProfile(editIndex, m.trim(), e.trim()); vm.showSettings = false }
+                            else { vm.saveProfile(editIndex, m.trim(), e.trim(), keepAlts); vm.showSettings = false }
                         }
                         Btn("Läs in fil", false) { vm.pickFile() }
                         Btn("Stäng", false, if (hasList) Modifier.focusRequester(primary) else Modifier) { vm.showSettings = false }
@@ -786,13 +793,13 @@ fun ProfileRow(vm: MainVm, i: Int, p: Profile) {
 
 /** Bekräftelse när en ny spellista skickats från mobilen. */
 @Composable
-fun ConfirmPlaylist(vm: MainVm, p: Pair<String, String>) {
+fun ConfirmPlaylist(vm: MainVm, p: Triple<String, String, String>) {
     val fr = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(150); runCatching { fr.requestFocus() } }
     val server = remember(p) {
         Xtream.parse(p.first)?.let { "Xtream: " + it.first.substringAfter("://") + "  ·  användare " + it.second }
             ?: runCatching { java.net.URL(p.first).host }.getOrDefault(p.first.take(60))
-    }
+    } + p.third.lines().count { it.isNotBlank() }.let { if (it > 0) "  ·  $it reservadress" + (if (it > 1) "er" else "") else "" }
     Dialog(onDismissRequest = { vm.pendingPlaylist = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Glass(Modifier.fillMaxWidth(0.55f), alpha = 0.2f, solid = true) {
             Column(Modifier.padding(30.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -805,11 +812,11 @@ fun ConfirmPlaylist(vm: MainVm, p: Pair<String, String>) {
                     color = White.copy(0.65f), fontSize = 15.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Btn(if (vm.profiles.isEmpty()) "Använd" else "Ersätt nuvarande", true, Modifier.focusRequester(fr)) {
-                        val (a, b) = p; vm.pendingPlaylist = null
-                        vm.saveProfile(if (vm.profiles.isEmpty()) -1 else vm.activeProfile, a, b)
+                        val (a, b, c) = p; vm.pendingPlaylist = null
+                        vm.saveProfile(if (vm.profiles.isEmpty()) -1 else vm.activeProfile, a, b, c)
                     }
                     if (vm.profiles.isNotEmpty() && vm.profiles.size < MAX_PROFILES)
-                        Btn("Spara som ny", false) { val (a, b) = p; vm.pendingPlaylist = null; vm.saveProfile(-1, a, b) }
+                        Btn("Spara som ny", false) { val (a, b, c) = p; vm.pendingPlaylist = null; vm.saveProfile(-1, a, b, c) }
                     Btn("Avbryt", false) { vm.pendingPlaylist = null }
                 }
             }
