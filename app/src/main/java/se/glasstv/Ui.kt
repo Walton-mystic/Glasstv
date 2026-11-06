@@ -47,6 +47,12 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -225,7 +231,21 @@ fun Home(vm: MainVm) {
         // Apple TV-upplägg: stor panel med livebild överst, kanalikoner i rutnät under.
         Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(22.dp)) {
             Glass(Modifier.fillMaxWidth().height(190.dp)) { Info(vm, focused, now) }
-            Glass(Modifier.fillMaxWidth().weight(1f)) { ChannelList(vm, shown, now) }
+            Glass(Modifier.fillMaxWidth().weight(1f)) {
+                Column(Modifier.fillMaxSize()) {
+                    // Smal rad överst: vad som visas till vänster, en liten sökknapp till höger.
+                    Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        val title = when {
+                            vm.query.isNotBlank() -> "Sökresultat · ${shown.size} kanaler"
+                            vm.selected != null -> "${vm.selected} · ${shown.size} kanaler"
+                            else -> "Alla kanaler · ${shown.size}"
+                        }
+                        Text(title, color = White.copy(0.5f), fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        SearchBar(vm)
+                    }
+                    Box(Modifier.weight(1f)) { ChannelList(vm, shown, now) }
+                }
+            }
         }
     }
     Text(vm.versionLabel, color = White.copy(0.45f), fontSize = 12.sp,
@@ -312,7 +332,7 @@ fun Rail(vm: MainVm, modifier: Modifier) {
                                 onFocus = { vm.focused = c }) {
                                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Box(Modifier.size(width = 40.dp, height = 26.dp).clip(RoundedCornerShape(7.dp)).background(White.copy(0.1f)), contentAlignment = Alignment.Center) {
-                                        if (c.logo != null) AsyncImage(c.logo, null, Modifier.fillMaxSize().padding(2.dp), contentScale = ContentScale.Fit)
+                                        if (c.logo != null) AsyncImage(logoRequest(LocalContext.current, c.logo), null, Modifier.fillMaxSize().padding(2.dp), contentScale = ContentScale.Fit)
                                         else Text(c.name.take(2), color = White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     }
                                     Spacer(Modifier.width(10.dp))
@@ -341,6 +361,7 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             val msg = when {
                 vm.loading -> "Laddar kanaler…"
+                vm.query.isNotBlank() -> "Inga kanaler hittades för \"${vm.query.trim()}\""
                 vm.status.isNotEmpty() -> vm.status
                 else -> "Ingen spellista. Öppna ⚙ Inställningar."
             }
@@ -362,7 +383,7 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
         val loader = ctx.imageLoader
         for (c in list.take(400)) {
             val logo = c.logo ?: continue
-            loader.enqueue(ImageRequest.Builder(ctx).data(logo).size(240).memoryCachePolicy(CachePolicy.DISABLED).build())
+            loader.enqueue(logoRequest(ctx, logo))
         }
     }
     val lastRepeat = remember { LongArray(1) }
@@ -395,16 +416,68 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
                         ?: vm.gridState.layoutInfo.visibleItemsInfo.firstNotNullOfOrNull { info -> (info.key as? Int)?.let { k -> reqs[k] } }
                         ?: FocusRequester.Default
                 }
-                exit = { d -> if (d == FocusDirection.Left) FocusRequester.Default else FocusRequester.Cancel }
+                // Vänster går till menyn, Upp från översta raden till sökknappen.
+                exit = { d -> if (d == FocusDirection.Left || d == FocusDirection.Up) FocusRequester.Default else FocusRequester.Cancel }
             }
             .focusGroup()
     ) {
-        val top = vm.topChannels
+        val top = if (vm.query.isBlank()) vm.topChannels else emptyList()
         if (top.isNotEmpty()) item(key = "top", span = { GridItemSpan(maxLineSpan) }, contentType = "top") { TopRow(vm, top, now) }
         gridItems(list, key = { it.uid }, contentType = { 0 }) { c -> ChannelTile(vm, c, now, reqs) }
     }
     }
 }
+
+/** Liten sökknapp som blir ett sökfält. Tillbaka eller ✕ tömmer sökningen. */
+@Composable
+fun SearchBar(vm: MainVm) {
+    var open by remember { mutableStateOf(vm.query.isNotEmpty()) }
+    val fr = remember { FocusRequester() }
+    val focus = LocalFocusManager.current
+    val scope = rememberCoroutineScope()
+    // Ny söktext: börja om högst upp i rutnätet.
+    LaunchedEffect(vm.query) { runCatching { vm.gridState.scrollToItem(0) } }
+    BackHandler(enabled = open && !vm.fullscreen) { vm.query = ""; open = false }
+    if (!open) {
+        Focusable(onClick = { open = true }) {
+            Text("🔍  Sök", color = White.copy(0.75f), fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp))
+        }
+        return
+    }
+    LaunchedEffect(Unit) { delay(80); runCatching { fr.requestFocus() } }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier.width(260.dp).height(38.dp).clip(Pill).background(White.copy(0.12f)).border(1.dp, White.copy(0.4f), Pill).padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("🔍", fontSize = 13.sp); Spacer(Modifier.width(8.dp))
+            BasicTextField(
+                value = vm.query, onValueChange = { vm.query = it }, singleLine = true,
+                textStyle = TextStyle(color = White, fontSize = 15.sp), cursorBrush = SolidColor(White),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focus.moveFocus(FocusDirection.Down) }, onDone = { focus.moveFocus(FocusDirection.Down) }),
+                modifier = Modifier.weight(1f).focusRequester(fr).onFocusChanged {
+                    // Lämnar man ett tomt sökfält stängs det igen.
+                    if (!it.isFocused && vm.query.isBlank()) scope.launch { delay(50); open = false }
+                },
+                decorationBox = { inner -> Box(contentAlignment = Alignment.CenterStart) {
+                    if (vm.query.isEmpty()) Text("Sök kanal, t.ex. svt", color = White.copy(0.45f), fontSize = 15.sp)
+                    inner()
+                } }
+            )
+        }
+        Focusable(onClick = { vm.query = ""; open = false }) {
+            Text("✕", color = White.copy(0.8f), fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+        }
+    }
+}
+
+/**
+ * Samma bildförfrågan överallt: fast storlek och adressen som nyckel. Då ligger en logga som redan visats
+ * kvar färdig i minnet och ritas direkt när rutan rullar in igen, i stället för att läsas och packas upp på nytt.
+ */
+fun logoRequest(ctx: android.content.Context, url: String): ImageRequest =
+    ImageRequest.Builder(ctx).data(url).size(256, 144).memoryCacheKey(url).build()
 
 /** Håller den markerade raden ca en tredjedel ner i rutnätet och glider dit på 260 ms. */
 private val SmoothFocusScroll = object : BringIntoViewSpec {
@@ -432,17 +505,18 @@ fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRe
     val hue = remember(c.name) { hueOf(c.name) }
     val tileBg = remember(hue) { Brush.linearGradient(listOf(Color.hsv(hue, 0.62f, 0.62f), Color.hsv((hue + 40f) % 360f, 0.6f, 0.36f))) }
     val shape = RoundedCornerShape(22.dp)
-    var logoOk by remember(c.logo) { mutableStateOf(false) }
+    // Namnet visas bara om kanalen saknar logga eller om den inte gick att hämta, så rutan blinkar inte vid scroll.
+    var logoFailed by remember(c.logo) { mutableStateOf(c.logo == null) }
+    val ctx = LocalContext.current
+    val logoReq = remember(c.logo) { c.logo?.let { logoRequest(ctx, it) } }
     // Håll in OK för att favoritmarkera: en gul linje fylls på medan man håller, kort tryck öppnar kanalen.
     var hold by remember { mutableStateOf(false) }
     var held by remember { mutableStateOf(false) }
     val holdP = remember { Animatable(0f) }
-    LaunchedEffect(hold) {
-        if (hold) {
-            holdP.snapTo(0f)
-            holdP.animateTo(1f, tween(FAV_HOLD_MS.toInt(), easing = LinearEasing))
-            vm.toggleFavChannel(c); held = true; hold = false
-        } else holdP.snapTo(0f)
+    if (hold) LaunchedEffect(Unit) {
+        holdP.snapTo(0f)
+        holdP.animateTo(1f, tween(FAV_HOLD_MS.toInt(), easing = LinearEasing))
+        vm.toggleFavChannel(c); held = true; hold = false
     }
     val isFav = c.url in vm.favChannels
     Column(modifier.zIndex(if (f) 1f else 0f), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -479,11 +553,11 @@ fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRe
                 .clickable { vm.open(c) },
             contentAlignment = Alignment.Center
         ) {
-            if (c.logo != null) AsyncImage(
-                c.logo, null, Modifier.fillMaxSize().padding(10.dp), contentScale = ContentScale.Fit,
-                onSuccess = { logoOk = true }, onError = { logoOk = false }
+            if (logoReq != null && !logoFailed) AsyncImage(
+                logoReq, null, Modifier.fillMaxSize().padding(10.dp), contentScale = ContentScale.Fit,
+                onError = { logoFailed = true }
             )
-            if (!logoOk) {
+            if (logoFailed) {
                 val n = c.name
                 val size = when { n.length <= 5 -> 28.sp; n.length <= 9 -> 21.sp; n.length <= 13 -> 16.sp; else -> 14.sp }.let { if (small) it * 0.7f else it }
                 Text(n, color = Color.White, fontSize = size, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center,
@@ -491,7 +565,7 @@ fun ChannelTile(vm: MainVm, c: Channel, now: Long, reqs: MutableMap<Int, FocusRe
             }
             if (isFav) Text("★", color = Color(0xFFFFD60A), fontSize = if (small) 12.sp else 15.sp,
                 modifier = Modifier.align(Alignment.TopEnd).padding(top = 5.dp, end = 9.dp))
-            if (holdP.value > 0f) Box(Modifier.align(Alignment.BottomStart).fillMaxWidth(holdP.value).height(5.dp).background(Color(0xFFFFD60A)))
+            if (hold && holdP.value > 0f) Box(Modifier.align(Alignment.BottomStart).fillMaxWidth(holdP.value).height(5.dp).background(Color(0xFFFFD60A)))
         }
         Spacer(Modifier.height(8.dp))
         // Kanalnamnet står alltid kvar under rutan; programmet som går nu under det (om tv-guide finns).
@@ -531,7 +605,7 @@ fun Info(vm: MainVm, c: Channel?, now: Long) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (c.logo != null) {
                     Box(Modifier.size(44.dp).clip(RoundedCornerShape(11.dp)).background(White.copy(0.1f))) {
-                        AsyncImage(c.logo, null, Modifier.fillMaxSize().padding(4.dp), contentScale = ContentScale.Fit)
+                        AsyncImage(logoRequest(LocalContext.current, c.logo), null, Modifier.fillMaxSize().padding(4.dp), contentScale = ContentScale.Fit)
                     }
                     Spacer(Modifier.width(12.dp))
                 }

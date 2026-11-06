@@ -266,6 +266,10 @@ fun flag(name: String): String {
 private val digits = Regex("""\d+""")
 fun sortKey(name: String): String = digits.replace(name.lowercase()) { it.value.trimStart('0').padStart(8, '0') }
 
+/** Sökbar form av ett namn: "SVT 1 HD", "svt1" och "Sv-T1" blir alla "svt1hd"/"svt1". Accenter tas bort. */
+fun searchKey(s: String): String =
+    java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD).lowercase().filter { it.isLetterOrDigit() }
+
 /** Tomma platshållarkanaler som leverantörer lägger in, t.ex. "NO EVENT STREAMING NOW" för PPV-event som inte sänds. */
 private val placeholder = Regex("""(?i)\bno\s+(event|events|stream|streaming|live|signal|channel)\b|\bnot\s+(live|streaming)\s+now\b|\boff\s*air\b|\bcoming\s+soon\b""")
 fun isPlaceholder(name: String): Boolean = placeholder.containsMatchIn(name)

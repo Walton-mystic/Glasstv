@@ -453,7 +453,16 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     /** Antal kanaler per land/grupp, som visas i menyn. */
     val countryCounts by derivedStateOf { visible.groupingBy { it.country }.eachCount() }
 
+    /** Söktexten i kanalrutan. Tom = ingen sökning. */
+    var query by mutableStateOf("")
+    /** Sökbara namn, räknas ut en gång per kanallista i stället för vid varje bokstav. */
+    private val searchIndex by derivedStateOf { visible.map { searchKey(it.name) to it } }
+
     val shown by derivedStateOf {
+        val q = searchKey(query)
+        if (q.isNotEmpty()) return@derivedStateOf searchIndex.asSequence().filter { it.first.contains(q) }
+            // Namn som börjar med söktexten först ("SVT1" före "Kanal SVT"), sedan A–Ö.
+            .sortedWith(compareBy<Pair<String, Channel>>({ !it.first.startsWith(q) }, { sortKey(it.second.name) })).map { it.second }.toList()
         val s = selected
         val cs = countries
         val base = if (s != null && s in cs) visible.filter { it.country == s }
@@ -638,7 +647,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
 
     fun toggleOnlyFav() { onlyFav = !onlyFav; repo.onlyFav = onlyFav; select(null); reloadEpg() }
     fun select(c: String?) {
-        selected = c; focused = null
+        selected = c; focused = null; query = ""
         viewModelScope.launch { runCatching { gridState.scrollToItem(0) } }
     }
 
@@ -703,7 +712,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         focused = p
         if (!Th.preview) player.stop()
         // Raden "Mest sedda" ligger först i rutnätet, så kanalernas plats är en steg längre ned när den visas.
-        val i = if (p == null) -1 else shown.indexOfFirst { it.uid == p.uid }.let { if (it >= 0 && topChannels.isNotEmpty()) it + 1 else it }
+        val i = if (p == null) -1 else shown.indexOfFirst { it.uid == p.uid }.let { if (it >= 0 && topChannels.isNotEmpty() && query.isBlank()) it + 1 else it }
         viewModelScope.launch {
             if (i >= 0) runCatching { gridState.scrollToItem(i, -200) }
             focusUid = p?.uid
