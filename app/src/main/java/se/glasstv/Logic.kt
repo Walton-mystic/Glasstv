@@ -460,11 +460,16 @@ class MainVm(app: Application) : AndroidViewModel(app) {
 
     val shown by derivedStateOf {
         val q = searchKey(query)
-        if (q.isNotEmpty()) return@derivedStateOf searchIndex.asSequence().filter { it.first.contains(q) }
-            // Namn som börjar med söktexten först ("SVT1" före "Kanal SVT"), sedan A–Ö.
-            .sortedWith(compareBy<Pair<String, Channel>>({ !it.first.startsWith(q) }, { sortKey(it.second.name) })).map { it.second }.toList()
         val s = selected
         val cs = countries
+        if (q.isNotEmpty()) {
+            // Sökningen gäller kanalerna i rutan: valt land, eller alla länder som visas i menyn.
+            val inView: (Channel) -> Boolean =
+                if (s != null && s in cs) { c -> c.country == s } else { val set = cs.toHashSet(); { c -> c.country in set } }
+            return@derivedStateOf searchIndex.asSequence().filter { it.first.contains(q) && inView(it.second) }
+                // Namn som börjar med söktexten först ("SVT1" före "Kanal SVT"), sedan A–Ö.
+                .sortedWith(compareBy<Pair<String, Channel>>({ !it.first.startsWith(q) }, { sortKey(it.second.name) })).map { it.second }.toList()
+        }
         val base = if (s != null && s in cs) visible.filter { it.country == s }
             else { val set = cs.toHashSet(); visible.filter { it.country in set } }
         if (!Th.sortAz) base

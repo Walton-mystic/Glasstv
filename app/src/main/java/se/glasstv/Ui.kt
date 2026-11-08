@@ -53,6 +53,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -236,7 +237,7 @@ fun Home(vm: MainVm) {
                     // Smal rad överst: vad som visas till vänster, en liten sökknapp till höger.
                     Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                         val title = when {
-                            vm.query.isNotBlank() -> "Sökresultat · ${shown.size} kanaler"
+                            vm.query.isNotBlank() -> "Sökresultat i ${vm.selected ?: "alla kanaler"} · ${shown.size}"
                             vm.selected != null -> "${vm.selected} · ${shown.size} kanaler"
                             else -> "Alla kanaler · ${shown.size}"
                         }
@@ -361,7 +362,7 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             val msg = when {
                 vm.loading -> "Laddar kanaler…"
-                vm.query.isNotBlank() -> "Inga kanaler hittades för \"${vm.query.trim()}\""
+                vm.query.isNotBlank() -> "Inga kanaler hittades för \"${vm.query.trim()}\"" + (vm.selected?.let { " i $it. Välj Alla kanaler för att söka överallt." } ?: "")
                 vm.status.isNotEmpty() -> vm.status
                 else -> "Ingen spellista. Öppna ⚙ Inställningar."
             }
@@ -434,17 +435,26 @@ fun SearchBar(vm: MainVm) {
     var open by remember { mutableStateOf(vm.query.isNotEmpty()) }
     val fr = remember { FocusRequester() }
     val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
+    // Sant först när sökfältet faktiskt har haft fokus, så att det inte stänger sig själv innan man hunnit dit.
+    var hadFocus by remember { mutableStateOf(false) }
     // Ny söktext: börja om högst upp i rutnätet.
     LaunchedEffect(vm.query) { runCatching { vm.gridState.scrollToItem(0) } }
     BackHandler(enabled = open && !vm.fullscreen) { vm.query = ""; open = false }
     if (!open) {
-        Focusable(onClick = { open = true }) {
+        Focusable(onClick = { hadFocus = false; open = true }) {
             Text("🔍  Sök", color = White.copy(0.75f), fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp))
         }
         return
     }
-    LaunchedEffect(Unit) { delay(80); runCatching { fr.requestFocus() } }
+    // Flytta fokus till fältet direkt (annars hoppar TV:n upp i menyn) och visa tangentbordet.
+    LaunchedEffect(Unit) {
+        repeat(5) {
+            if (runCatching { fr.requestFocus() }.isSuccess) { delay(60); keyboard?.show(); return@LaunchedEffect }
+            delay(40)
+        }
+    }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             Modifier.width(260.dp).height(38.dp).clip(Pill).background(White.copy(0.12f)).border(1.dp, White.copy(0.4f), Pill).padding(horizontal = 14.dp),
@@ -457,11 +467,16 @@ fun SearchBar(vm: MainVm) {
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { focus.moveFocus(FocusDirection.Down) }, onDone = { focus.moveFocus(FocusDirection.Down) }),
                 modifier = Modifier.weight(1f).focusRequester(fr).onFocusChanged {
-                    // Lämnar man ett tomt sökfält stängs det igen.
-                    if (!it.isFocused && vm.query.isBlank()) scope.launch { delay(50); open = false }
-                },
+                    if (it.isFocused) hadFocus = true
+                    // Lämnar man ett tomt sökfält stängs det igen (men inte innan man har varit i det).
+                    else if (hadFocus && vm.query.isBlank()) scope.launch { delay(50); open = false }
+                }
+                    // OK på fältet tar alltid fram tangentbordet igen.
+                    .onPreviewKeyEvent { e ->
+                        if (e.type == KeyEventType.KeyUp && e.key == Key.DirectionCenter) { keyboard?.show(); true } else false
+                    },
                 decorationBox = { inner -> Box(contentAlignment = Alignment.CenterStart) {
-                    if (vm.query.isEmpty()) Text("Sök kanal, t.ex. svt", color = White.copy(0.45f), fontSize = 15.sp)
+                    if (vm.query.isEmpty()) Text(if (vm.selected != null) "Sök i ${vm.selected}" else "Sök kanal, t.ex. svt", color = White.copy(0.45f), fontSize = 15.sp)
                     inner()
                 } }
             )
