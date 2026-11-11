@@ -233,6 +233,8 @@ fun Home(vm: MainVm) {
         Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(22.dp)) {
             Glass(Modifier.fillMaxWidth().height(190.dp)) { Info(vm, focused, now) }
             Glass(Modifier.fillMaxWidth().weight(1f)) {
+                // Upp från översta kanalraden går alltid hit, oavsett var i raden man står.
+                val searchReq = remember { FocusRequester() }
                 Column(Modifier.fillMaxSize()) {
                     // Smal rad överst: vad som visas till vänster, en liten sökknapp till höger.
                     Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -242,9 +244,9 @@ fun Home(vm: MainVm) {
                             else -> "Alla kanaler · ${shown.size}"
                         }
                         Text(title, color = White.copy(0.5f), fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        SearchBar(vm)
+                        SearchBar(vm, searchReq)
                     }
-                    Box(Modifier.weight(1f)) { ChannelList(vm, shown, now) }
+                    Box(Modifier.weight(1f)) { ChannelList(vm, shown, now, searchReq) }
                 }
             }
         }
@@ -357,7 +359,7 @@ fun Rail(vm: MainVm, modifier: Modifier) {
 }
 
 @Composable
-fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
+fun ChannelList(vm: MainVm, list: List<Channel>, now: Long, searchReq: FocusRequester) {
     if (list.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             val msg = when {
@@ -418,7 +420,7 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
                         ?: FocusRequester.Default
                 }
                 // Vänster går till menyn, Upp från översta raden till sökknappen.
-                exit = { d -> if (d == FocusDirection.Left || d == FocusDirection.Up) FocusRequester.Default else FocusRequester.Cancel }
+                exit = { d -> when (d) { FocusDirection.Left -> FocusRequester.Default; FocusDirection.Up -> searchReq; else -> FocusRequester.Cancel } }
             }
             .focusGroup()
     ) {
@@ -431,9 +433,8 @@ fun ChannelList(vm: MainVm, list: List<Channel>, now: Long) {
 
 /** Liten sökknapp som blir ett sökfält. Tillbaka eller ✕ tömmer sökningen. */
 @Composable
-fun SearchBar(vm: MainVm) {
+fun SearchBar(vm: MainVm, fr: FocusRequester) {
     var open by remember { mutableStateOf(vm.query.isNotEmpty()) }
-    val fr = remember { FocusRequester() }
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
@@ -443,7 +444,7 @@ fun SearchBar(vm: MainVm) {
     LaunchedEffect(vm.query) { runCatching { vm.gridState.scrollToItem(0) } }
     BackHandler(enabled = open && !vm.fullscreen) { vm.query = ""; open = false }
     if (!open) {
-        Focusable(onClick = { hadFocus = false; open = true }) {
+        Focusable(onClick = { hadFocus = false; open = true }, modifier = Modifier.focusRequester(fr)) {
             Text("🔍  Sök", color = White.copy(0.75f), fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp))
         }
         return
